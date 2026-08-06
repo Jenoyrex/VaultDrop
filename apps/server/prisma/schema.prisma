@@ -7,19 +7,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum StorageProvider {
-  LOCAL
-  CLOUD
-}
-
 model User {
   id           String   @id @default(uuid())
   username     String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
-  vaults Vault[]
+  vaults       Vault[]
 
   @@map("users")
 }
@@ -30,10 +24,9 @@ model Vault {
   ownerId   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  owner   User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  folders Folder[]
-  files   File[]
+  files     File[]
+  folders   Folder[]
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([ownerId])
   @@map("vaults")
@@ -46,11 +39,10 @@ model Folder {
   parentId  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  vault    Vault    @relation(fields: [vaultId], references: [id], onDelete: Cascade)
-  parent   Folder?  @relation("FolderToFolder", fields: [parentId], references: [id], onDelete: Cascade)
-  children Folder[] @relation("FolderToFolder")
-  files    File[]
+  files     File[]
+  parent    Folder?  @relation("FolderToFolder", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[] @relation("FolderToFolder")
+  vault     Vault    @relation(fields: [vaultId], references: [id], onDelete: Cascade)
 
   @@unique([vaultId, parentId, name])
   @@index([vaultId])
@@ -69,12 +61,16 @@ model File {
   storageKey      String
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
-
-  vault  Vault   @relation(fields: [vaultId], references: [id], onDelete: Cascade)
-  folder Folder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  folder          Folder?         @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  vault           Vault           @relation(fields: [vaultId], references: [id], onDelete: Cascade)
 
   @@unique([vaultId, folderId, name])
   @@index([vaultId])
   @@index([folderId])
   @@map("files")
+}
+
+enum StorageProvider {
+  LOCAL
+  CLOUD
 }

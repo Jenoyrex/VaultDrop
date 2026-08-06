@@ -44,16 +44,26 @@ export class FileService {
 
   async uploadFile(ownerId: string, input: UploadFileInput): Promise<FileDTO> {
     await this.vaultService.getOwnedVaultOrThrow(input.vaultId, ownerId);
+
     if (input.folderId) {
-      const folder = await this.folderService.getFolderOrThrow(input.folderId, ownerId);
+      const folder = await this.folderService.getFolderOrThrow(
+        input.folderId,
+        ownerId
+      );
+
       if (folder.vaultId !== input.vaultId) {
         throw AppError.badRequest("Folder does not belong to this vault");
       }
     }
 
     const existing = await this.prisma.file.findFirst({
-      where: { vaultId: input.vaultId, folderId: input.folderId, name: input.originalName }
+      where: {
+        vaultId: input.vaultId,
+        folderId: input.folderId,
+        name: input.originalName
+      }
     });
+
     if (existing) {
       throw AppError.conflict("A file with this name already exists here");
     }
@@ -70,7 +80,11 @@ export class FileService {
       }
     });
 
-    const storageKey = buildVaultStorageKey(input.vaultId, file.id, input.originalName);
+    const storageKey = buildVaultStorageKey(
+      input.vaultId,
+      file.id,
+      input.originalName
+    );
 
     try {
       await this.storage.put({
@@ -79,44 +93,110 @@ export class FileService {
         contentType: input.mimeType
       });
     } catch (error) {
-      await this.prisma.file.delete({ where: { id: file.id } }).catch(() => undefined);
+      await this.prisma.file
+        .delete({
+          where: {
+            id: file.id
+          }
+        })
+        .catch(() => undefined);
+
       throw error;
     }
 
     const updated = await this.prisma.file.update({
-      where: { id: file.id },
-      data: { storageKey }
+      where: {
+        id: file.id
+      },
+      data: {
+        storageKey
+      }
     });
 
     return toFileDTO(updated);
   }
 
-  async getFileOrThrow(fileId: string, ownerId: string): Promise<PrismaFile> {
-    const file = await this.prisma.file.findUnique({ where: { id: fileId } });
+  async getFileOrThrow(
+    fileId: string,
+    ownerId: string
+  ): Promise<PrismaFile> {
+    const file = await this.prisma.file.findUnique({
+      where: {
+        id: fileId
+      }
+    });
+
     if (!file) {
       throw AppError.notFound("File not found");
     }
-    await this.vaultService.getOwnedVaultOrThrow(file.vaultId, ownerId);
+
+    await this.vaultService.getOwnedVaultOrThrow(
+      file.vaultId,
+      ownerId
+    );
+
     return file;
   }
 
-  async getFileMetadata(fileId: string, ownerId: string): Promise<FileDTO> {
+  async getFileMetadata(
+    fileId: string,
+    ownerId: string
+  ): Promise<FileDTO> {
     const file = await this.getFileOrThrow(fileId, ownerId);
     return toFileDTO(file);
+  }
+
+  // ✅ NEW
+  async listFiles(
+    vaultId: string,
+    ownerId: string
+  ): Promise<FileDTO[]> {
+    await this.vaultService.getOwnedVaultOrThrow(
+      vaultId,
+      ownerId
+    );
+
+    const files = await this.prisma.file.findMany({
+      where: {
+        vaultId
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    return files.map(toFileDTO);
   }
 
   async getFileStream(
     fileId: string,
     ownerId: string
-  ): Promise<{ stream: NodeJS.ReadableStream; file: FileDTO }> {
+  ): Promise<{
+    stream: NodeJS.ReadableStream;
+    file: FileDTO;
+  }> {
     const file = await this.getFileOrThrow(fileId, ownerId);
+
     const stream = await this.storage.getStream(file.storageKey);
-    return { stream, file: toFileDTO(file) };
+
+    return {
+      stream,
+      file: toFileDTO(file)
+    };
   }
 
-  async deleteFile(fileId: string, ownerId: string): Promise<void> {
+  async deleteFile(
+    fileId: string,
+    ownerId: string
+  ): Promise<void> {
     const file = await this.getFileOrThrow(fileId, ownerId);
+
     await this.storage.delete(file.storageKey);
-    await this.prisma.file.delete({ where: { id: file.id } });
+
+    await this.prisma.file.delete({
+      where: {
+        id: file.id
+      }
+    });
   }
 }

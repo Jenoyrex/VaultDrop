@@ -10,7 +10,10 @@ import { AppError } from "../utils/app-error.js";
 import { FileService } from "../services/file.service.js";
 
 const PREVIEWABLE_MIME_PREFIXES = ["image/", "text/", "audio/", "video/"];
-const PREVIEWABLE_EXACT_MIME_TYPES = new Set(["application/pdf", "application/json"]);
+const PREVIEWABLE_EXACT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/json"
+]);
 
 function isPreviewable(mimeType: string): boolean {
   return (
@@ -25,13 +28,25 @@ export function createFileRouter(
   storage: StorageAdapter
 ): Router {
   const router = Router();
-  const storageDriverLabel = env.STORAGE_DRIVER === "cloud" ? "CLOUD" : "LOCAL";
-  const fileService = new FileService(prisma, storage, storageDriverLabel);
+
+  const storageDriverLabel =
+    env.STORAGE_DRIVER === "cloud"
+      ? "CLOUD"
+      : "LOCAL";
+
+  const fileService = new FileService(
+    prisma,
+    storage,
+    storageDriverLabel
+  );
+
   const requireAuth = createAuthMiddleware(env);
 
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: env.MAX_UPLOAD_BYTES }
+    limits: {
+      fileSize: env.MAX_UPLOAD_BYTES
+    }
   });
 
   const uploadQuerySchema = z.object({
@@ -41,23 +56,54 @@ export function createFileRouter(
 
   router.use(requireAuth);
 
+  // ✅ LIST FILES
+  router.get(
+    "/",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+
+      const vaultId = req.query.vaultId as string;
+
+      if (!vaultId) {
+        throw AppError.badRequest("vaultId is required");
+      }
+
+      const files = await fileService.listFiles(
+        vaultId,
+        req.user.sub
+      );
+
+      res.json({ files });
+    })
+  );
+
+  // ✅ UPLOAD
   router.post(
     "/upload",
     upload.single("file"),
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
+
       const query = uploadQuerySchema.parse(req.query);
+
       if (!req.file) {
-        throw AppError.badRequest("No file was provided under the 'file' field");
+        throw AppError.badRequest(
+          "No file was provided under the 'file' field"
+        );
       }
 
-      const file = await fileService.uploadFile(req.user.sub, {
-        vaultId: query.vaultId,
-        folderId: query.folderId ?? null,
-        originalName: req.file.originalname,
-        mimeType: req.file.mimetype || "application/octet-stream",
-        buffer: req.file.buffer
-      });
+      const file = await fileService.uploadFile(
+        req.user.sub,
+        {
+          vaultId: query.vaultId,
+          folderId: query.folderId ?? null,
+          originalName: req.file.originalname,
+          mimeType:
+            req.file.mimetype ||
+            "application/octet-stream",
+          buffer: req.file.buffer
+        }
+      );
 
       res.status(201).json({ file });
     })
@@ -67,8 +113,14 @@ export function createFileRouter(
     "/:fileId",
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
-      const file = await fileService.getFileMetadata(req.params["fileId"] as string, req.user.sub);
-      res.status(200).json({ file });
+
+      const file =
+        await fileService.getFileMetadata(
+          req.params.fileId,
+          req.user.sub
+        );
+
+      res.json({ file });
     })
   );
 
@@ -76,12 +128,25 @@ export function createFileRouter(
     "/:fileId/download",
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
-      const { stream, file } = await fileService.getFileStream(
-        req.params["fileId"] as string,
-        req.user.sub
+
+      const { stream, file } =
+        await fileService.getFileStream(
+          req.params.fileId,
+          req.user.sub
+        );
+
+      res.setHeader(
+        "Content-Type",
+        file.mimeType
       );
-      res.setHeader("Content-Type", file.mimeType);
-      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.name)}"`);
+
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${encodeURIComponent(
+          file.name
+        )}"`
+      );
+
       stream.pipe(res);
     })
   );
@@ -90,15 +155,33 @@ export function createFileRouter(
     "/:fileId/preview",
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
-      const { stream, file } = await fileService.getFileStream(
-        req.params["fileId"] as string,
-        req.user.sub
-      );
+
+      const { stream, file } =
+        await fileService.getFileStream(
+          req.params.fileId,
+          req.user.sub
+        );
+
       if (!isPreviewable(file.mimeType)) {
-        throw new AppError(415, "UNSUPPORTED_PREVIEW", "This file type cannot be previewed inline");
+        throw new AppError(
+          415,
+          "UNSUPPORTED_PREVIEW",
+          "This file type cannot be previewed inline"
+        );
       }
-      res.setHeader("Content-Type", file.mimeType);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.name)}"`);
+
+      res.setHeader(
+        "Content-Type",
+        file.mimeType
+      );
+
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(
+          file.name
+        )}"`
+      );
+
       stream.pipe(res);
     })
   );
@@ -107,7 +190,12 @@ export function createFileRouter(
     "/:fileId",
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
-      await fileService.deleteFile(req.params["fileId"] as string, req.user.sub);
+
+      await fileService.deleteFile(
+        req.params.fileId,
+        req.user.sub
+      );
+
       res.status(204).send();
     })
   );
