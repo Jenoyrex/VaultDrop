@@ -199,4 +199,48 @@ export class FileService {
       }
     });
   }
+
+  // ✅ NEW — minimal additive method for the file rename feature.
+  // Only updates the DB-stored display name; storageKey (the on-disk /
+  // on-bucket path) is intentionally left untouched, so no storage move
+  // is required.
+  async renameFile(
+    fileId: string,
+    ownerId: string,
+    newName: string
+  ): Promise<FileDTO> {
+    const file = await this.getFileOrThrow(fileId, ownerId);
+
+    if (newName === file.name) {
+      return toFileDTO(file);
+    }
+
+    const existing = await this.prisma.file.findFirst({
+      where: {
+        vaultId: file.vaultId,
+        folderId: file.folderId,
+        name: newName,
+        NOT: {
+          id: file.id
+        }
+      }
+    });
+
+    if (existing) {
+      throw AppError.conflict(
+        "A file with this name already exists here"
+      );
+    }
+
+    const updated = await this.prisma.file.update({
+      where: {
+        id: file.id
+      },
+      data: {
+        name: newName
+      }
+    });
+
+    return toFileDTO(updated);
+  }
 }

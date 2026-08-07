@@ -11,7 +11,9 @@ import {
   Upload,
   Loader2,
   FolderPlus,
-  Vault as VaultIcon
+  Vault as VaultIcon,
+  Search,
+  X
 } from "lucide-react";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -19,7 +21,8 @@ import {
   fileApi,
   folderApi,
   type FileDTO,
-  type FolderDTO
+  type FolderDTO,
+  type SearchResponse
 } from "@/lib/api-client";
 
 import FileCard from "@/components/file/FileCard";
@@ -51,6 +54,13 @@ export default function VaultPage() {
   const [uploading, setUploading] = useState(false);
 
   const [showFolderDialog, setShowFolderDialog] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResponse | null>(
+    null
+  );
+  const [searching, setSearching] = useState(false);
+  const searchRequestIdRef = useRef(0);
 
   const currentFolderId =
     breadcrumbs[breadcrumbs.length - 1]?.id ?? null;
@@ -92,6 +102,64 @@ export default function VaultPage() {
     loadContents(currentFolderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadContents, currentFolderId]);
+
+  const runSearch = useCallback(async () => {
+    const trimmed = searchQuery.trim();
+
+    if (!trimmed || !accessToken) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+
+    const requestId = ++searchRequestIdRef.current;
+
+    try {
+      setSearching(true);
+
+      const results = await folderApi.search(
+        vaultId,
+        trimmed,
+        currentFolderId,
+        accessToken
+      );
+
+      if (requestId === searchRequestIdRef.current) {
+        setSearchResults(results);
+      }
+    } catch (err) {
+      console.error(err);
+
+      if (requestId === searchRequestIdRef.current) {
+        setSearchResults({ folders: [], files: [] });
+      }
+    } finally {
+      if (requestId === searchRequestIdRef.current) {
+        setSearching(false);
+      }
+    }
+  }, [searchQuery, accessToken, vaultId, currentFolderId]);
+
+  // Recursive search — scoped to whichever folder is currently open (or
+  // the whole vault at root) — filters as the user types, debounced so
+  // it doesn't re-query the backend on every keystroke.
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+
+    if (!trimmed) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      runSearch();
+    }, 300);
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [searchQuery, currentFolderId, runSearch]);
 
   function openFolder(folder: FolderDTO) {
     setBreadcrumbs((prev) => [
@@ -174,7 +242,35 @@ export default function VaultPage() {
     await loadContents(currentFolderId);
   }
 
+  function formatPath(path: { id: string; name: string }[]): string {
+    return ["Vault", ...path.map((segment) => segment.name)].join(" / ");
+  }
+
+  function openSearchResultFolder(
+    folder: { id: string; name: string },
+    path: { id: string; name: string }[]
+  ) {
+    setBreadcrumbs([
+      VAULT_ROOT_CRUMB,
+      ...path.map((segment) => ({
+        id: segment.id,
+        name: segment.name
+      })),
+      { id: folder.id, name: folder.name }
+    ]);
+
+    setSearchQuery("");
+  }
+
   const isEmpty = subfolders.length === 0 && files.length === 0;
+
+  const isSearching = searchQuery.trim().length > 0;
+  const hasNoSearchResults =
+    isSearching &&
+    !searching &&
+    searchResults !== null &&
+    searchResults.folders.length === 0 &&
+    searchResults.files.length === 0;
 
   return (
     <>
@@ -217,7 +313,6 @@ export default function VaultPage() {
               hidden
               ref={fileInputRef}
               type="file"
-              multiple
               onChange={handleUpload}
             />
 
@@ -277,6 +372,30 @@ export default function VaultPage() {
           })}
         </nav>
 
+        {!isEmpty && (
+          <div className="relative max-w-md">
+
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search this folder and its subfolders..."
+              className="w-full rounded-lg border bg-background py-2.5 pl-9 pr-9 outline-none"
+            />
+
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:bg-accent"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+
+          </div>
+        )}
+
         <div
           {...getRootProps()}
           className="relative"
@@ -297,6 +416,85 @@ export default function VaultPage() {
             <div className="flex justify-center py-20">
               <Loader2 className="h-10 w-10 animate-spin" />
             </div>
+
+          ) : isSearching ? (
+
+            searching ? (
+
+              <div className="flex justify-center py-20">
+                <Loader2 className="h-10 w-10 animate-spin" />
+              </div>
+
+            ) : hasNoSearchResults ? (
+
+              <div className="flex min-h-[420px] flex-col items-center justify-center rounded-xl border border-dashed">
+
+                <Search className="mb-5 h-16 w-16 text-primary" />
+
+                <h2 className="text-2xl font-semibold">
+                  No results found
+                </h2>
+
+                <p className="mt-2 text-muted-foreground">
+                  Nothing matches &quot;{searchQuery}&quot; in this folder or its subfolders.
+                </p>
+
+              </div>
+
+            ) : (
+
+              <div className="space-y-8">
+
+                {searchResults && searchResults.folders.length > 0 && (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {searchResults.folders.map((folder) => (
+                      <FolderCard
+                        key={folder.id}
+                        folder={folder}
+                        onClick={() =>
+                          openSearchResultFolder(folder, folder.path)
+                        }
+                        onRenamed={() => {
+                          loadContents(currentFolderId);
+                          runSearch();
+                        }}
+                        pathLabel={
+                          folder.parentId !== currentFolderId
+                            ? formatPath(folder.path)
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {searchResults && searchResults.files.length > 0 && (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {searchResults.files.map((file) => (
+                      <FileCard
+                        key={file.id}
+                        file={file}
+                        onDeleted={() => {
+                          loadContents(currentFolderId);
+                          runSearch();
+                        }}
+                        onRenamed={() => {
+                          loadContents(currentFolderId);
+                          runSearch();
+                        }}
+                        pathLabel={
+                          file.folderId !== currentFolderId
+                            ? formatPath(file.path)
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+
+              </div>
+
+            )
 
           ) : isEmpty ? (
 
@@ -321,6 +519,7 @@ export default function VaultPage() {
               <FolderGrid
                 folders={subfolders}
                 onOpenFolder={openFolder}
+                onRenamed={() => loadContents(currentFolderId)}
               />
 
               {files.length > 0 && (
@@ -330,6 +529,7 @@ export default function VaultPage() {
                       key={file.id}
                       file={file}
                       onDeleted={() => loadContents(currentFolderId)}
+                      onRenamed={() => loadContents(currentFolderId)}
                     />
                   ))}
                 </div>

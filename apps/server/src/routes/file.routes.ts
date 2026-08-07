@@ -54,6 +54,10 @@ export function createFileRouter(
     folderId: z.string().uuid().optional()
   });
 
+  const renameFileSchema = z.object({
+    name: z.string().min(1).max(255)
+  });
+
   router.use(requireAuth);
 
   // ✅ LIST FILES
@@ -183,6 +187,23 @@ export function createFileRouter(
       );
 
       stream.pipe(res);
+    })
+  );
+
+  router.patch(
+    "/:fileId",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+
+      const body = renameFileSchema.parse(req.body);
+
+      const file = await fileService.renameFile(
+        req.params.fileId,
+        req.user.sub,
+        body.name
+      );
+
+      res.status(200).json({ file });
     })
   );
 

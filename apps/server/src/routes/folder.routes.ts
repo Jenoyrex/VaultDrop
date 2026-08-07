@@ -28,6 +28,12 @@ export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router
     folderId: z.string().uuid().optional()
   });
 
+  const searchQuerySchema = z.object({
+    vaultId: z.string().uuid(),
+    folderId: z.string().uuid().optional(),
+    query: z.string().min(1)
+  });
+
   router.use(requireAuth);
 
   router.post(
@@ -55,6 +61,21 @@ export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router
         req.user.sub
       );
       res.status(200).json(contents);
+    })
+  );
+
+  router.get(
+    "/search",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+      const query = searchQuerySchema.parse(req.query);
+      const results = await folderService.searchContents(
+        query.vaultId,
+        req.user.sub,
+        query.query,
+        query.folderId ?? null
+      );
+      res.status(200).json(results);
     })
   );
 

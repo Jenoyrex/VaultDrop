@@ -5,7 +5,8 @@ import {
   FileText,
   Image as ImageIcon,
   Download,
-  Trash2
+  Trash2,
+  Pencil
 } from "lucide-react";
 
 import {
@@ -17,20 +18,45 @@ import { useAuth } from "@/components/providers/auth-provider";
 import { useFilePreview } from "@/hooks/useFilePreview";
 import ImageViewer from "./ImageViewer";
 import PdfViewer from "./PdfViewer";
+import RenameDialog from "@/components/shared/RenameDialog";
+
+function splitFileName(fileName: string): {
+  base: string;
+  extension: string;
+} {
+  const lastDot = fileName.lastIndexOf(".");
+
+  if (lastDot <= 0) {
+    return { base: fileName, extension: "" };
+  }
+
+  return {
+    base: fileName.slice(0, lastDot),
+    extension: fileName.slice(lastDot)
+  };
+}
 
 interface FileCardProps {
   file: FileDTO;
   onDeleted: () => void;
+  onRenamed: () => void;
+  pathLabel?: string;
 }
 
 export default function FileCard({
   file,
-  onDeleted
+  onDeleted,
+  onRenamed,
+  pathLabel
 }: FileCardProps) {
 
   const { accessToken } = useAuth();
 
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+
+  const { base: fileBaseName, extension: fileExtension } =
+    splitFileName(file.name);
 
   const { previewUrl } = useFilePreview(
     file.id,
@@ -101,6 +127,18 @@ export default function FileCard({
 
   }
 
+  async function handleRename(newName: string) {
+    if (!accessToken) return;
+
+    await fileApi.rename(
+      file.id,
+      newName,
+      accessToken
+    );
+
+    onRenamed();
+  }
+
   return (
     <>
       <div className="overflow-hidden rounded-xl border bg-card transition hover:shadow-xl">
@@ -134,6 +172,12 @@ export default function FileCard({
             {file.name}
           </h3>
 
+          {pathLabel && (
+            <p className="truncate text-xs text-muted-foreground">
+              {pathLabel}
+            </p>
+          )}
+
           <p className="text-sm text-muted-foreground">
             {(file.sizeBytes / 1024).toFixed(2)} KB
           </p>
@@ -149,6 +193,13 @@ export default function FileCard({
               className="rounded-lg border p-2 hover:bg-accent"
             >
               <Download className="h-4 w-4" />
+            </button>
+
+            <button
+              onClick={() => setRenameOpen(true)}
+              className="rounded-lg border p-2 hover:bg-accent"
+            >
+              <Pencil className="h-4 w-4" />
             </button>
 
             <button
@@ -192,6 +243,15 @@ export default function FileCard({
         />
 
       )}
+
+      <RenameDialog
+        open={renameOpen}
+        title="Rename File"
+        initialName={fileBaseName}
+        extension={fileExtension}
+        onClose={() => setRenameOpen(false)}
+        onRename={handleRename}
+      />
 
     </>
   );

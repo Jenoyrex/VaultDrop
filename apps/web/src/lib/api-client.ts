@@ -106,6 +106,24 @@ export interface FolderContentsResponse {
   files: FileDTO[];
 }
 
+export interface PathSegment {
+  id: string;
+  name: string;
+}
+
+export interface FolderSearchResult extends FolderDTO {
+  path: PathSegment[];
+}
+
+export interface FileSearchResult extends FileDTO {
+  path: PathSegment[];
+}
+
+export interface SearchResponse {
+  folders: FolderSearchResult[];
+  files: FileSearchResult[];
+}
+
 export const authApi = {
   checkUsername(username: string): Promise<CheckUsernameResponse> {
     return request<CheckUsernameResponse>(
@@ -177,6 +195,11 @@ export const folderApi = {
     );
   },
 
+  /**
+   * Wraps GET /folders/contents — returns the current folder (or null for
+   * vault root), its direct subfolders, and the files that live directly
+   * inside it. This is the single source of truth for the folder explorer.
+   */
   contents(
     vaultId: string,
     folderId: string | null,
@@ -212,6 +235,47 @@ export const folderApi = {
           name,
           parentId
         })
+      }
+    );
+  },
+
+  rename(
+    folderId: string,
+    name: string,
+    token: string
+  ): Promise<{ folder: FolderDTO }> {
+    return request<{ folder: FolderDTO }>(
+      `/folders/${folderId}`,
+      {
+        method: "PATCH",
+        token,
+        body: JSON.stringify({ name })
+      }
+    );
+  },
+
+  /**
+   * Recursive search. At vault root (folderId null) searches the whole
+   * vault; inside a folder, searches only that folder's descendants.
+   * Each result carries `path` — the ancestor chain — so the UI can
+   * show where a match lives when it isn't in the currently open folder.
+   */
+  search(
+    vaultId: string,
+    query: string,
+    folderId: string | null,
+    token: string
+  ): Promise<SearchResponse> {
+    const params = new URLSearchParams({ vaultId, query });
+
+    if (folderId) {
+      params.set("folderId", folderId);
+    }
+
+    return request<SearchResponse>(
+      `/folders/search?${params.toString()}`,
+      {
+        token
       }
     );
   }
@@ -283,6 +347,21 @@ export const fileApi = {
       {
         method: "DELETE",
         token
+      }
+    );
+  },
+
+  rename(
+    fileId: string,
+    name: string,
+    token: string
+  ): Promise<{ file: FileDTO }> {
+    return request<{ file: FileDTO }>(
+      `/files/${fileId}`,
+      {
+        method: "PATCH",
+        token,
+        body: JSON.stringify({ name })
       }
     );
   }

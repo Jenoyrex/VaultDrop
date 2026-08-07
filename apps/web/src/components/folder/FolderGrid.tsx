@@ -6,11 +6,13 @@ import FolderCard from "./FolderCard";
 interface FolderGridProps {
   folders: FolderDTO[];
   onOpenFolder: (folder: FolderDTO) => void;
+  onRenamed: () => void;
 }
 
 export default function FolderGrid({
   folders,
-  onOpenFolder
+  onOpenFolder,
+  onRenamed
 }: FolderGridProps) {
   if (folders.length === 0) {
     return null;
@@ -23,6 +25,7 @@ export default function FolderGrid({
           key={folder.id}
           folder={folder}
           onClick={() => onOpenFolder(folder)}
+          onRenamed={onRenamed}
         />
       ))}
     </div>
