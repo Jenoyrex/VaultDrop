@@ -6,8 +6,7 @@ import {
   Image as ImageIcon,
   Download,
   Trash2,
-  Pencil,
-  Share2
+  Pencil
 } from "lucide-react";
 
 import {
@@ -20,7 +19,6 @@ import { useFilePreview } from "@/hooks/useFilePreview";
 import ImageViewer from "./ImageViewer";
 import PdfViewer from "./PdfViewer";
 import RenameDialog from "@/components/shared/RenameDialog";
-import ShareDialog from "./ShareDialog";
 
 function splitFileName(fileName: string): {
   base: string;
@@ -56,7 +54,6 @@ export default function FileCard({
 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
-  const [shareOpen, setShareOpen] = useState(false);
 
   const { base: fileBaseName, extension: fileExtension } =
     splitFileName(file.name);
@@ -199,13 +196,6 @@ export default function FileCard({
             </button>
 
             <button
-              onClick={() => setShareOpen(true)}
-              className="rounded-lg border p-2 hover:bg-accent"
-            >
-              <Share2 className="h-4 w-4" />
-            </button>
-
-            <button
               onClick={() => setRenameOpen(true)}
               className="rounded-lg border p-2 hover:bg-accent"
             >
@@ -261,13 +251,6 @@ export default function FileCard({
         extension={fileExtension}
         onClose={() => setRenameOpen(false)}
         onRename={handleRename}
-      />
-
-      <ShareDialog
-        open={shareOpen}
-        fileId={file.id}
-        fileName={file.name}
-        onClose={() => setShareOpen(false)}
       />
 
     </>
