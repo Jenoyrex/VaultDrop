@@ -63,11 +63,26 @@ model File {
   updatedAt       DateTime        @updatedAt
   folder          Folder?         @relation(fields: [folderId], references: [id], onDelete: Cascade)
   vault           Vault           @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+  shares          Share[]
 
   @@unique([vaultId, folderId, name])
   @@index([vaultId])
   @@index([folderId])
   @@map("files")
+}
+
+model Share {
+  id           String    @id @default(uuid())
+  token        String    @unique @default(uuid())
+  fileId       String
+  file         File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime?
+  passwordHash String?
+  createdAt    DateTime  @default(now())
+
+  @@index([fileId])
+  @@index([token])
+  @@map("shares")
 }
 
 enum StorageProvider {

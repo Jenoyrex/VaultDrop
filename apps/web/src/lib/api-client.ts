@@ -124,6 +124,29 @@ export interface SearchResponse {
   files: FileSearchResult[];
 }
 
+export type ShareExpiryOption = "never" | "24h" | "7d" | "30d";
+
+export interface ShareDTO {
+  id: string;
+  token: string;
+  fileId: string;
+  expiresAt: string | null;
+  hasPassword: boolean;
+  createdAt: string;
+}
+
+export interface ShareMetadata {
+  requiresPassword: boolean;
+  expiresAt: string | null;
+  file: {
+    id: string;
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: string;
+  } | null;
+}
+
 export const authApi = {
   checkUsername(username: string): Promise<CheckUsernameResponse> {
     return request<CheckUsernameResponse>(
@@ -364,5 +387,67 @@ export const fileApi = {
         body: JSON.stringify({ name })
       }
     );
+  }
+};
+
+export const shareApi = {
+  create(
+    fileId: string,
+    options: { expiresIn: ShareExpiryOption; password?: string },
+    token: string
+  ): Promise<{ share: ShareDTO }> {
+    return request<{ share: ShareDTO }>(
+      "/shares",
+      {
+        method: "POST",
+        token,
+        body: JSON.stringify({
+          fileId,
+          expiresIn: options.expiresIn,
+          password: options.password || undefined
+        })
+      }
+    );
+  },
+
+  getMetadata(
+    shareToken: string,
+    password?: string
+  ): Promise<ShareMetadata> {
+    const params = new URLSearchParams();
+
+    if (password) {
+      params.set("password", password);
+    }
+
+    const qs = params.toString();
+
+    return request<ShareMetadata>(
+      `/shares/${shareToken}${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  downloadUrl(shareToken: string, password?: string): string {
+    const params = new URLSearchParams();
+
+    if (password) {
+      params.set("password", password);
+    }
+
+    const qs = params.toString();
+
+    return `${env.NEXT_PUBLIC_API_URL}/shares/${shareToken}/download${qs ? `?${qs}` : ""}`;
+  },
+
+  previewUrl(shareToken: string, password?: string): string {
+    const params = new URLSearchParams();
+
+    if (password) {
+      params.set("password", password);
+    }
+
+    const qs = params.toString();
+
+    return `${env.NEXT_PUBLIC_API_URL}/shares/${shareToken}/preview${qs ? `?${qs}` : ""}`;
   }
 };
