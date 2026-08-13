@@ -16,6 +16,28 @@ export interface VaultDTO {
   ownerId: string;
   createdAt: string;
   updatedAt: string;
+
+  /**
+   * Zero-knowledge encryption metadata, owner-scoped only (every endpoint
+   * returning a VaultDTO already checks vault ownership before building
+   * one). All fields are null together on a legacy, pre-Phase-1 vault
+   * that has no client-side encryption — its files are plain. Populated
+   * together once a vault is created with an encryption envelope.
+   *
+   * Deliberately excludes the recovery-wrapped DEK: that material must
+   * never flow through general vault responses like this one.
+   */
+  encryptionVersion: number | null;
+  /** Base64-encoded 16-byte PBKDF2 salt used to derive the KEK. */
+  kekSalt: string | null;
+  /** PBKDF2 iteration count used to derive the KEK. */
+  kekIterations: number | null;
+  /** PBKDF2 hash algorithm used to derive the KEK, e.g. "SHA-256". */
+  kekHash: string | null;
+  /** Base64-encoded AES-256-GCM ciphertext of the DEK, wrapped by the KEK. */
+  wrappedDekCiphertext: string | null;
+  /** Base64-encoded 12-byte IV used for the KEK-wrap above. */
+  wrappedDekIv: string | null;
 }
 
 export interface FolderDTO {

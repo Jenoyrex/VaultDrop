@@ -166,6 +166,19 @@ export const vaultApi = {
     });
   },
 
+  /**
+   * Fetches a single vault, including the zero-knowledge encryption
+   * metadata (KDF params + KEK-wrapped DEK) needed to unlock it — null
+   * on every encryption field for a legacy, unencrypted vault. The
+   * server scopes this to the authenticated owner; there is no public
+   * vault-lookup path.
+   */
+  get(vaultId: string, token: string): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}`, {
+      token
+    });
+  },
+
   create(name: string, token: string): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>("/vaults", {
       method: "POST",

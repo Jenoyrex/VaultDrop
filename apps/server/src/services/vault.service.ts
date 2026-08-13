@@ -8,7 +8,15 @@ function toVaultDTO(vault: Vault): VaultDTO {
     name: vault.name,
     ownerId: vault.ownerId,
     createdAt: vault.createdAt.toISOString(),
-    updatedAt: vault.updatedAt.toISOString()
+    updatedAt: vault.updatedAt.toISOString(),
+    encryptionVersion: vault.encryptionVersion,
+    kekSalt: vault.kekSalt,
+    kekIterations: vault.kekIterations,
+    kekHash: vault.kekHash,
+    wrappedDekCiphertext: vault.wrappedDekCiphertext,
+    wrappedDekIv: vault.wrappedDekIv
+    // Deliberately omitted: vault.recoveryWrappedDekCiphertext / recoveryWrappedDekIv.
+    // Recovery-wrap material must never flow through this general, owner-scoped DTO.
   };
 }
 
