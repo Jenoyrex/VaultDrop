@@ -102,10 +102,17 @@ describe("file upload routes", () => {
         "base64"
       );
       const wrappedKeyIv = Buffer.from("fake-iv-value").toString("base64");
+      // Stand-ins for the client-encrypted name — this test doesn't
+      // exercise real name encryption, just that the server stores and
+      // returns whatever ciphertext it's given without ever seeing a
+      // plaintext name (see the dedicated encrypted-name tests).
+      const encryptedName = Buffer.from("fake-encrypted-name").toString("base64");
+      const nameIv = Buffer.from("fake-name-iv").toString("base64");
 
       const params = new URLSearchParams({
         vaultId,
-        name: "secret.txt",
+        encryptedName,
+        nameIv,
         mimeType: "text/plain",
         encryptionVersion: "1",
         wrappedKeyCiphertext,
@@ -122,7 +129,12 @@ describe("file upload routes", () => {
       expect(response.body.file.encrypted).toBe(true);
       expect(response.body.file.wrappedKeyCiphertext).toBe(wrappedKeyCiphertext);
       expect(response.body.file.wrappedKeyIv).toBe(wrappedKeyIv);
-      expect(response.body.file.name).toBe("secret.txt");
+      expect(response.body.file.encryptedName).toBe(encryptedName);
+      expect(response.body.file.nameIv).toBe(nameIv);
+      // The server never receives a plaintext name for an encrypted
+      // upload, so `name` must stay null — never a placeholder derived
+      // from anything client-supplied.
+      expect(response.body.file.name).toBeNull();
 
       const storageKey = response.body.file.storageKey as string;
       const onDisk = await readFile(join(tmpDir, storageKey));
@@ -152,7 +164,8 @@ describe("file upload routes", () => {
 
       const params = new URLSearchParams({
         vaultId,
-        name: "file.txt",
+        encryptedName: "abc",
+        nameIv: "def",
         mimeType: "text/plain",
         encryptionVersion: "1",
         wrappedKeyCiphertext: "abc",

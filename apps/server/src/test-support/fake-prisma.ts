@@ -3,11 +3,11 @@ import type { PrismaClient } from "@prisma/client";
 
 /**
  * A minimal in-memory stand-in for `PrismaClient`, covering only the
- * subset of calls the file-upload path actually makes (vault ownership
- * lookup, duplicate-name check, file creation). Used so the upload route
- * integration tests don't require a live Postgres instance. Not a general
- * Prisma mock — extend the covered surface only if a test genuinely needs
- * a call this doesn't yet support.
+ * subset of calls the file/folder routes actually make (vault ownership
+ * lookup, duplicate-name checks, create/update/delete/list). Used so
+ * route integration tests don't require a live Postgres instance. Not a
+ * general Prisma mock — extend the covered surface only if a test
+ * genuinely needs a call this doesn't yet support.
  */
 
 export interface FakeVaultRow {
@@ -18,7 +18,7 @@ export interface FakeVaultRow {
 
 export interface FakeFileRow {
   id: string;
-  name: string;
+  name: string | null;
   mimeType: string;
   sizeBytes: number;
   vaultId: string;
@@ -30,16 +30,47 @@ export interface FakeFileRow {
   encrypted: boolean;
   wrappedKeyCiphertext: string | null;
   wrappedKeyIv: string | null;
+  encryptedName: string | null;
+  nameIv: string | null;
+}
+
+export interface FakeFolderRow {
+  id: string;
+  name: string | null;
+  vaultId: string;
+  parentId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  encrypted: boolean;
+  encryptedName: string | null;
+  nameIv: string | null;
 }
 
 type CreateFileData = Omit<FakeFileRow, "id" | "createdAt" | "updatedAt">;
+type CreateFolderData = Omit<FakeFolderRow, "id" | "createdAt" | "updatedAt">;
+
+interface FindFirstWhere {
+  vaultId: string;
+  folderId?: string | null;
+  parentId?: string | null;
+  name: string | null;
+  NOT?: { id: string };
+}
+
+interface FindManyWhere {
+  vaultId: string;
+  folderId?: string | null;
+  parentId?: string | null;
+}
 
 export function createFakePrisma(seedVaults: FakeVaultRow[]): {
   prisma: PrismaClient;
   files: FakeFileRow[];
+  folders: FakeFolderRow[];
 } {
   const vaults = [...seedVaults];
   const files: FakeFileRow[] = [];
+  const folders: FakeFolderRow[] = [];
 
   const fake = {
     vault: {
@@ -48,22 +79,26 @@ export function createFakePrisma(seedVaults: FakeVaultRow[]): {
       }
     },
     file: {
-      async findFirst({
-        where
-      }: {
-        where: { vaultId: string; folderId: string | null; name: string };
-      }) {
+      async findFirst({ where }: { where: FindFirstWhere }) {
         return (
           files.find(
             (file) =>
               file.vaultId === where.vaultId &&
-              file.folderId === where.folderId &&
-              file.name === where.name
+              file.folderId === (where.folderId ?? null) &&
+              file.name === where.name &&
+              (!where.NOT || file.id !== where.NOT.id)
           ) ?? null
         );
       },
       async findUnique({ where }: { where: { id: string } }) {
         return files.find((file) => file.id === where.id) ?? null;
+      },
+      async findMany({ where }: { where: FindManyWhere }) {
+        return files.filter((file) => {
+          if (file.vaultId !== where.vaultId) return false;
+          if ("folderId" in where && file.folderId !== where.folderId) return false;
+          return true;
+        });
       },
       async create({ data }: { data: CreateFileData }) {
         const now = new Date();
@@ -75,9 +110,87 @@ export function createFakePrisma(seedVaults: FakeVaultRow[]): {
         };
         files.push(row);
         return row;
+      },
+      async update({
+        where,
+        data
+      }: {
+        where: { id: string };
+        data: Partial<CreateFileData>;
+      }) {
+        const row = files.find((file) => file.id === where.id);
+        if (!row) {
+          throw new Error(`fake-prisma: file ${where.id} not found`);
+        }
+        Object.assign(row, data, { updatedAt: new Date() });
+        return row;
+      },
+      async delete({ where }: { where: { id: string } }) {
+        const index = files.findIndex((file) => file.id === where.id);
+        if (index === -1) {
+          throw new Error(`fake-prisma: file ${where.id} not found`);
+        }
+        const [row] = files.splice(index, 1);
+        return row;
+      }
+    },
+    folder: {
+      async findUnique({ where }: { where: { id: string } }) {
+        return folders.find((folder) => folder.id === where.id) ?? null;
+      },
+      async findFirst({ where }: { where: FindFirstWhere }) {
+        return (
+          folders.find(
+            (folder) =>
+              folder.vaultId === where.vaultId &&
+              folder.parentId === (where.parentId ?? null) &&
+              folder.name === where.name &&
+              (!where.NOT || folder.id !== where.NOT.id)
+          ) ?? null
+        );
+      },
+      async findMany({ where }: { where: FindManyWhere }) {
+        return folders.filter((folder) => {
+          if (folder.vaultId !== where.vaultId) return false;
+          if ("parentId" in where && folder.parentId !== where.parentId) return false;
+          return true;
+        });
+      },
+      async create({ data }: { data: CreateFolderData }) {
+        const now = new Date();
+        const row: FakeFolderRow = {
+          id: randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+          ...data
+        };
+        folders.push(row);
+        return row;
+      },
+      async update({
+        where,
+        data
+      }: {
+        where: { id: string };
+        data: Partial<CreateFolderData>;
+      }) {
+        const row = folders.find((folder) => folder.id === where.id);
+        if (!row) {
+          throw new Error(`fake-prisma: folder ${where.id} not found`);
+        }
+        Object.assign(row, data, { updatedAt: new Date() });
+        return row;
+      },
+      async delete({ where }: { where: { id: string } }) {
+        const index = folders.findIndex((folder) => folder.id === where.id);
+        if (index === -1) {
+          throw new Error(`fake-prisma: folder ${where.id} not found`);
+        }
+        const [row] = folders.splice(index, 1);
+        return row;
       }
     }
   };
 
-  return { prisma: fake as unknown as PrismaClient, files };
+  return { prisma: fake as unknown as PrismaClient, files, folders };
 }

@@ -5,7 +5,7 @@ import FolderCard from "./FolderCard";
 
 interface FolderGridProps {
   folders: FolderDTO[];
-  onOpenFolder: (folder: FolderDTO) => void;
+  onOpenFolder: (folder: FolderDTO, displayName: string) => void;
   onRenamed: () => void;
 }
 
@@ -24,7 +24,7 @@ export default function FolderGrid({
         <FolderCard
           key={folder.id}
           folder={folder}
-          onClick={() => onOpenFolder(folder)}
+          onClick={(displayName) => onOpenFolder(folder, displayName)}
           onRenamed={onRenamed}
         />
       ))}

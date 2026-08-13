@@ -83,9 +83,14 @@ describe("file download/preview routes", () => {
   ) {
     const wireBytes = await buildEncryptedFixture(opts.plaintext, opts.fileKey);
 
+    // Stand-in ciphertext for the name — these tests exercise
+    // download/preview behavior, not real name encryption, so a
+    // deterministic base64 encoding of the plaintext name is a
+    // convenient (not cryptographically meaningful) fixture here.
     const params = new URLSearchParams({
       vaultId,
-      name: opts.name,
+      encryptedName: Buffer.from(opts.name).toString("base64"),
+      nameIv: Buffer.from("fake-name-iv").toString("base64"),
       mimeType: opts.mimeType,
       encryptionVersion: "1",
       wrappedKeyCiphertext: Buffer.from("fake-wrapped-file-key").toString("base64"),

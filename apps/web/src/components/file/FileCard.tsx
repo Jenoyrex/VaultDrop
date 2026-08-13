@@ -18,7 +18,9 @@ import {
 import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { useFilePreview } from "@/hooks/useFilePreview";
+import { useDisplayName } from "@/hooks/useDisplayName";
 import { fetchFileBlob, saveBlob } from "@/lib/download/decrypt-download";
+import { encryptText } from "@/lib/crypto";
 import ImageViewer from "./ImageViewer";
 import PdfViewer from "./PdfViewer";
 import RenameDialog from "@/components/shared/RenameDialog";
@@ -59,15 +61,21 @@ export default function FileCard({
   const [viewerOpen, setViewerOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
 
-  const { base: fileBaseName, extension: fileExtension } =
-    splitFileName(file.name);
-
   // Only relevant for encrypted files — this tab's in-memory unwrapped
   // vault DEK, if the vault is currently unlocked. `FileCard` is only ever
   // rendered once its vault's contents are shown, which the vault page
   // already gates behind `UnlockVaultGate`, so this is expected to be
   // defined whenever `file.encrypted` is true.
   const vaultDek = file.encrypted ? getVaultKey(file.vaultId) : undefined;
+
+  const { displayName, error: nameError } = useDisplayName(file, vaultDek);
+  // Never falls back to ciphertext or a blank string — while the name is
+  // still resolving (or failed to), the fallback is a neutral placeholder,
+  // not `file.name` (which is null for an encrypted file by construction).
+  const nameForDisplay = displayName ?? (nameError ? "Unable to decrypt name" : "Loading…");
+
+  const { base: fileBaseName, extension: fileExtension } =
+    splitFileName(nameForDisplay);
 
   const { previewUrl } = useFilePreview(file, accessToken, vaultDek);
 
@@ -79,7 +87,7 @@ export default function FileCard({
 
     try {
       const blob = await fetchFileBlob(file, accessToken, vaultDek);
-      saveBlob(blob, file.name);
+      saveBlob(blob, nameForDisplay);
     } catch {
       alert("Download failed.");
     }
@@ -89,7 +97,7 @@ export default function FileCard({
 
     if (!accessToken) return false;
 
-    if (!confirm(`Delete "${file.name}"?`)) {
+    if (!confirm(`Delete "${nameForDisplay}"?`)) {
       return false;
     }
 
@@ -117,11 +125,26 @@ export default function FileCard({
   async function handleRename(newName: string) {
     if (!accessToken) return;
 
-    await fileApi.rename(
-      file.id,
-      newName,
-      accessToken
-    );
+    if (file.encrypted) {
+      if (!vaultDek) {
+        alert("Vault is locked. Unlock it and try again.");
+        return;
+      }
+
+      const { ciphertext, iv } = await encryptText(newName, vaultDek);
+
+      await fileApi.rename(
+        file.id,
+        { encryptedName: ciphertext, nameIv: iv },
+        accessToken
+      );
+    } else {
+      await fileApi.rename(
+        file.id,
+        { name: newName },
+        accessToken
+      );
+    }
 
     onRenamed();
   }
@@ -142,7 +165,7 @@ export default function FileCard({
           {isImage && previewUrl ? (
             <img
               src={previewUrl}
-              alt={file.name}
+              alt={nameForDisplay}
               className="h-full w-full object-cover"
             />
           ) : isImage ? (
@@ -162,7 +185,7 @@ export default function FileCard({
                 aria-label="Encrypted"
               />
             )}
-            <span className="truncate">{file.name}</span>
+            <span className="truncate">{nameForDisplay}</span>
           </h3>
 
           {pathLabel && (
@@ -212,6 +235,7 @@ export default function FileCard({
 
         <ImageViewer
           file={file}
+          displayName={nameForDisplay}
           imageUrl={previewUrl}
           onClose={() => setViewerOpen(false)}
           onDeleted={onDeleted}
@@ -222,7 +246,7 @@ export default function FileCard({
       {viewerOpen && previewUrl && isPdf && (
 
         <PdfViewer
-          file={file}
+          displayName={nameForDisplay}
           pdfUrl={previewUrl}
           onClose={() => setViewerOpen(false)}
           onDownload={handleDownload}

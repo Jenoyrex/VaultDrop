@@ -5,11 +5,14 @@ import { Folder, Pencil } from "lucide-react";
 
 import { folderApi, type FolderDTO } from "@/lib/api-client";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useVaultKeys } from "@/components/providers/vault-key-provider";
+import { useDisplayName } from "@/hooks/useDisplayName";
+import { encryptText } from "@/lib/crypto";
 import RenameDialog from "@/components/shared/RenameDialog";
 
 interface FolderCardProps {
   folder: FolderDTO;
-  onClick: () => void;
+  onClick: (displayName: string) => void;
   onRenamed: () => void;
   pathLabel?: string;
 }
@@ -21,17 +24,43 @@ export default function FolderCard({
   pathLabel
 }: FolderCardProps) {
   const { accessToken } = useAuth();
+  const { getVaultKey } = useVaultKeys();
 
   const [renameOpen, setRenameOpen] = useState(false);
+
+  // Only relevant for an encrypted folder — this tab's in-memory unwrapped
+  // vault DEK, if the vault is currently unlocked. `FolderCard` is only
+  // ever rendered once its vault's contents are shown, which the vault
+  // page already gates behind `UnlockVaultGate`, so this is expected to
+  // be defined whenever `folder.encrypted` is true.
+  const vaultDek = folder.encrypted ? getVaultKey(folder.vaultId) : undefined;
+
+  const { displayName, error: nameError } = useDisplayName(folder, vaultDek);
+  const nameForDisplay = displayName ?? (nameError ? "Unable to decrypt name" : "Loading…");
 
   async function handleRename(newName: string) {
     if (!accessToken) return;
 
-    await folderApi.rename(
-      folder.id,
-      newName,
-      accessToken
-    );
+    if (folder.encrypted) {
+      if (!vaultDek) {
+        alert("Vault is locked. Unlock it and try again.");
+        return;
+      }
+
+      const { ciphertext, iv } = await encryptText(newName, vaultDek);
+
+      await folderApi.rename(
+        folder.id,
+        { encryptedName: ciphertext, nameIv: iv },
+        accessToken
+      );
+    } else {
+      await folderApi.rename(
+        folder.id,
+        { name: newName },
+        accessToken
+      );
+    }
 
     onRenamed();
   }
@@ -40,7 +69,7 @@ export default function FolderCard({
     <div className="group relative rounded-xl border bg-card transition hover:shadow-xl hover:border-primary">
 
       <button
-        onClick={onClick}
+        onClick={() => onClick(nameForDisplay)}
         className="flex w-full flex-col items-center justify-center p-6"
       >
         <Folder
@@ -49,7 +78,7 @@ export default function FolderCard({
         />
 
         <h3 className="max-w-full truncate text-lg font-semibold">
-          {folder.name}
+          {nameForDisplay}
         </h3>
 
         {pathLabel && (
@@ -72,7 +101,7 @@ export default function FolderCard({
       <RenameDialog
         open={renameOpen}
         title="Rename Folder"
-        initialName={folder.name}
+        initialName={nameForDisplay}
         onClose={() => setRenameOpen(false)}
         onRename={handleRename}
       />

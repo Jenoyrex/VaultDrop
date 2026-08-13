@@ -41,7 +41,12 @@ describe("fileApi.uploadEncrypted", () => {
     expect(url.pathname).toBe("/files/upload-encrypted");
     expect(url.searchParams.get("vaultId")).toBe("vault-1");
     expect(url.searchParams.get("folderId")).toBe("folder-1");
-    expect(url.searchParams.get("name")).toBe("hello.txt");
+    // No plaintext `name` query param at all — the server must never
+    // receive this file's real name, not even transiently in a URL.
+    expect(url.searchParams.has("name")).toBe(false);
+    expect(url.searchParams.get("encryptedName")).toBeTruthy();
+    expect(url.searchParams.get("encryptedName")).not.toContain("hello");
+    expect(url.searchParams.get("nameIv")).toBeTruthy();
     expect(url.searchParams.get("mimeType")).toBe("text/plain");
     expect(url.searchParams.get("encryptionVersion")).toBe("1");
     expect(url.searchParams.get("wrappedKeyCiphertext")).toBeTruthy();

@@ -80,6 +80,17 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 }
 
-export function buildVaultStorageKey(vaultId: string, fileId: string, fileName: string): string {
-  return join(vaultId, `${fileId}-${fileName}`);
+/**
+ * Builds the on-disk/on-bucket storage key for a file's content.
+ *
+ * `fileName` is optional and must be omitted for an encrypted upload:
+ * embedding the plaintext filename in the storage key would leak it into
+ * the filesystem path, cloud object key, and any server logs that record
+ * storage operations — defeating zero-knowledge name encryption even
+ * though the DB row itself only holds ciphertext. Legacy plaintext
+ * uploads keep passing `fileName` for readability/debuggability, exactly
+ * as before.
+ */
+export function buildVaultStorageKey(vaultId: string, fileId: string, fileName?: string): string {
+  return join(vaultId, fileName ? `${fileId}-${fileName}` : fileId);
 }

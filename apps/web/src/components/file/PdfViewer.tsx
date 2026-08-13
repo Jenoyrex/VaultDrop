@@ -2,10 +2,10 @@
 
 import { useEffect } from "react";
 import { X, Download, Trash2 } from "lucide-react";
-import type { FileDTO } from "@/lib/api-client";
 
 interface PdfViewerProps {
-  file: FileDTO;
+  /** Already-resolved (decrypted, if applicable) display name — never re-derived from `file.name`, which is null for an encrypted file. */
+  displayName: string;
   pdfUrl: string;
   onClose: () => void;
   onDownload: () => void;
@@ -13,7 +13,7 @@ interface PdfViewerProps {
 }
 
 export default function PdfViewer({
-  file,
+  displayName,
   pdfUrl,
   onClose,
   onDownload,
@@ -46,7 +46,7 @@ export default function PdfViewer({
         <div className="flex-1 overflow-hidden rounded-lg bg-white">
           <iframe
             src={pdfUrl}
-            title={file.name}
+            title={displayName}
             className="h-full w-full"
           />
         </div>

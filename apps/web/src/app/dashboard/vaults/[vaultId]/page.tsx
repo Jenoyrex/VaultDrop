@@ -20,14 +20,19 @@ import type { VaultDTO } from "@vaultdrop/types";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { hasEncryptionEnvelope } from "@/lib/vault-keys";
+import { encryptText } from "@/lib/crypto";
+import {
+  buildDecryptedSearchIndex,
+  filterDecryptedSearchIndex,
+  type DecryptedSearchIndex
+} from "@/lib/search/local-search";
 import {
   fileApi,
   folderApi,
   vaultApi,
   UnsupportedBrowserError,
   type FileDTO,
-  type FolderDTO,
-  type SearchResponse
+  type FolderDTO
 } from "@/lib/api-client";
 
 import FileCard from "@/components/file/FileCard";
@@ -67,14 +72,31 @@ export default function VaultPage() {
   const [showFolderDialog, setShowFolderDialog] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResponse | null>(
+  const [searchResults, setSearchResults] = useState<DecryptedSearchIndex | null>(
     null
   );
   const [searching, setSearching] = useState(false);
   const searchRequestIdRef = useRef(0);
 
+  // For an encrypted vault: the decrypted, unfiltered subtree for the
+  // current folder, fetched once per folder navigation and filtered
+  // locally (no further network calls) on every keystroke. Legacy vaults
+  // never populate this — they query the server per debounced keystroke
+  // instead. Cleared whenever the search scope changes (folder navigation
+  // or vault switch) below.
+  const searchIndexRef = useRef<DecryptedSearchIndex | null>(null);
+
   const currentFolderId =
     breadcrumbs[breadcrumbs.length - 1]?.id ?? null;
+
+  const encryptedVault = vault !== null && hasEncryptionEnvelope(vault);
+  // Only relevant once the vault is confirmed unlocked (see `needsUnlock`
+  // below, which gates all of the JSX that can reach this value).
+  const vaultDek = encryptedVault ? getVaultKey(vaultId) : undefined;
+
+  useEffect(() => {
+    searchIndexRef.current = null;
+  }, [vaultId, currentFolderId]);
 
   const loadContents = useCallback(
     async (folderId: string | null) => {
@@ -140,6 +162,29 @@ export default function VaultPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadContents, currentFolderId]);
 
+  // For a legacy vault, the server does the substring match and this
+  // returns its (already-filtered) result directly. For an encrypted
+  // vault, the server cannot match a query against ciphertext — instead
+  // this fetches the unfiltered subtree once (cached in `searchIndexRef`
+  // until the folder or vault changes), decrypts every name in it, and
+  // filters that decrypted index locally with no further network calls.
+  const loadSearchIndex = useCallback(async (): Promise<DecryptedSearchIndex | null> => {
+    if (!accessToken) return null;
+
+    if (encryptedVault) {
+      if (!vaultDek) return null;
+
+      if (!searchIndexRef.current) {
+        const raw = await folderApi.search(vaultId, null, currentFolderId, accessToken);
+        searchIndexRef.current = await buildDecryptedSearchIndex(raw, vaultDek);
+      }
+
+      return searchIndexRef.current;
+    }
+
+    return null;
+  }, [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId]);
+
   const runSearch = useCallback(async () => {
     const trimmed = searchQuery.trim();
 
@@ -154,12 +199,25 @@ export default function VaultPage() {
     try {
       setSearching(true);
 
-      const results = await folderApi.search(
-        vaultId,
-        trimmed,
-        currentFolderId,
-        accessToken
-      );
+      let results: DecryptedSearchIndex;
+
+      if (encryptedVault) {
+        const index = await loadSearchIndex();
+        results = index
+          ? filterDecryptedSearchIndex(index, trimmed)
+          : { folders: [], files: [] };
+      } else {
+        const raw = await folderApi.search(
+          vaultId,
+          trimmed,
+          currentFolderId,
+          accessToken
+        );
+        // Legacy names never need decryption (resolveDisplayName is a
+        // pass-through when `encrypted` is false) — reusing the same
+        // decorator keeps rendering/path-label code identical either way.
+        results = await buildDecryptedSearchIndex(raw, undefined);
+      }
 
       if (requestId === searchRequestIdRef.current) {
         setSearchResults(results);
@@ -175,7 +233,7 @@ export default function VaultPage() {
         setSearching(false);
       }
     }
-  }, [searchQuery, accessToken, vaultId, currentFolderId]);
+  }, [searchQuery, accessToken, vaultId, currentFolderId, encryptedVault, loadSearchIndex]);
 
   // Recursive search — scoped to whichever folder is currently open (or
   // the whole vault at root) — filters as the user types, debounced so
@@ -198,10 +256,10 @@ export default function VaultPage() {
     };
   }, [searchQuery, currentFolderId, runSearch]);
 
-  function openFolder(folder: FolderDTO) {
+  function openFolder(folder: FolderDTO, displayName: string) {
     setBreadcrumbs((prev) => [
       ...prev,
-      { id: folder.id, name: folder.name }
+      { id: folder.id, name: displayName }
     ]);
   }
 
@@ -218,9 +276,6 @@ export default function VaultPage() {
       // plaintext exactly as before. The upload UI only renders once
       // `!needsUnlock`, so an encrypted vault's DEK is guaranteed to
       // already be unlocked here.
-      const encryptedVault = vault !== null && hasEncryptionEnvelope(vault);
-      const vaultDek = encryptedVault ? getVaultKey(vaultId) : undefined;
-
       if (encryptedVault && !vaultDek) {
         console.error("Encrypted vault has no unlocked key in memory");
         alert("Upload failed. Please unlock the vault and try again.");
@@ -261,7 +316,7 @@ export default function VaultPage() {
         setUploading(false);
       }
     },
-    [accessToken, vault, vaultId, currentFolderId, loadContents, getVaultKey]
+    [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId, loadContents]
   );
 
   async function handleUpload(
@@ -295,31 +350,49 @@ export default function VaultPage() {
   async function createFolder(name: string) {
     if (!accessToken) return;
 
-    await folderApi.create(
-      vaultId,
-      name,
-      accessToken,
-      currentFolderId ?? undefined
-    );
+    if (encryptedVault) {
+      if (!vaultDek) {
+        alert("Vault is locked. Unlock it and try again.");
+        return;
+      }
+
+      const { ciphertext, iv } = await encryptText(name, vaultDek);
+
+      await folderApi.create(
+        vaultId,
+        { encryptedName: ciphertext, nameIv: iv },
+        accessToken,
+        currentFolderId ?? undefined
+      );
+    } else {
+      await folderApi.create(
+        vaultId,
+        { name },
+        accessToken,
+        currentFolderId ?? undefined
+      );
+    }
 
     await loadContents(currentFolderId);
   }
 
-  function formatPath(path: { id: string; name: string }[]): string {
-    return ["Vault", ...path.map((segment) => segment.name)].join(" / ");
+  function formatPathLabels(pathLabels: string[]): string {
+    return ["Vault", ...pathLabels].join(" / ");
   }
 
   function openSearchResultFolder(
-    folder: { id: string; name: string },
-    path: { id: string; name: string }[]
+    folder: { id: string },
+    displayName: string,
+    path: { id: string }[],
+    pathLabels: string[]
   ) {
     setBreadcrumbs([
       VAULT_ROOT_CRUMB,
-      ...path.map((segment) => ({
+      ...path.map((segment, index) => ({
         id: segment.id,
-        name: segment.name
+        name: pathLabels[index] ?? ""
       })),
-      { id: folder.id, name: folder.name }
+      { id: folder.id, name: displayName }
     ]);
 
     setSearchQuery("");
@@ -530,7 +603,12 @@ export default function VaultPage() {
                         key={folder.id}
                         folder={folder}
                         onClick={() =>
-                          openSearchResultFolder(folder, folder.path)
+                          openSearchResultFolder(
+                            folder,
+                            folder.displayName,
+                            folder.path,
+                            folder.pathLabels
+                          )
                         }
                         onRenamed={() => {
                           loadContents(currentFolderId);
@@ -538,7 +616,7 @@ export default function VaultPage() {
                         }}
                         pathLabel={
                           folder.parentId !== currentFolderId
-                            ? formatPath(folder.path)
+                            ? formatPathLabels(folder.pathLabels)
                             : undefined
                         }
                       />
@@ -562,7 +640,7 @@ export default function VaultPage() {
                         }}
                         pathLabel={
                           file.folderId !== currentFolderId
-                            ? formatPath(file.path)
+                            ? formatPathLabels(file.pathLabels)
                             : undefined
                         }
                       />

@@ -8,6 +8,8 @@ import { fetchFileBlob, saveBlob } from "@/lib/download/decrypt-download";
 
 interface ImageViewerProps {
   file: FileDTO;
+  /** Already-resolved (decrypted, if applicable) display name — never re-derived from `file.name`, which is null for an encrypted file. */
+  displayName: string;
   imageUrl: string;
   onClose: () => void;
   onDeleted: () => void;
@@ -15,6 +17,7 @@ interface ImageViewerProps {
 
 export default function ImageViewer({
   file,
+  displayName,
   imageUrl,
   onClose,
   onDeleted
@@ -31,7 +34,7 @@ export default function ImageViewer({
         : undefined;
 
       const blob = await fetchFileBlob(file, accessToken, vaultDek);
-      saveBlob(blob, file.name);
+      saveBlob(blob, displayName);
     } catch {
       alert("Download failed.");
     }
@@ -40,7 +43,7 @@ export default function ImageViewer({
   async function handleDelete() {
     if (!accessToken) return;
 
-    if (!confirm(`Delete "${file.name}"?`)) {
+    if (!confirm(`Delete "${displayName}"?`)) {
       return;
     }
 
@@ -64,7 +67,7 @@ export default function ImageViewer({
       >
         <img
           src={imageUrl}
-          alt={file.name}
+          alt={displayName}
           className="max-h-[80vh] rounded-lg"
         />
 

@@ -68,7 +68,10 @@ model Vault {
 
 model Folder {
   id        String   @id @default(uuid())
-  name      String
+  /// Plaintext folder name. Populated for legacy folders (`encrypted` =
+  /// false); NULL for folders created in an encrypted vault, whose real
+  /// name lives only in `encryptedName`/`nameIv` below.
+  name      String?
   vaultId   String
   parentId  String?
   createdAt DateTime @default(now())
@@ -78,6 +81,19 @@ model Folder {
   children  Folder[] @relation("FolderToFolder")
   vault     Vault    @relation(fields: [vaultId], references: [id], onDelete: Cascade)
 
+  /// True when this folder's name is client-side AES-256-GCM-encrypted
+  /// (decryptable only with the owning vault's DEK). False (the default)
+  /// means this folder predates Phase 1's name encryption or lives in an
+  /// unencrypted legacy vault, and `name` holds its real plaintext value.
+  encrypted     Boolean @default(false)
+  /// Base64-encoded AES-256-GCM ciphertext of this folder's name,
+  /// encrypted directly with the owning vault's DEK (the same primitive
+  /// used for file names — see `File.encryptedName`). Null whenever
+  /// `encrypted` is false.
+  encryptedName String?
+  /// Base64-encoded 12-byte IV used for the name encryption above.
+  nameIv        String?
+
   @@unique([vaultId, parentId, name])
   @@index([vaultId])
   @@index([parentId])
@@ -86,7 +102,10 @@ model Folder {
 
 model File {
   id              String          @id @default(uuid())
-  name            String
+  /// Plaintext file name. Populated for legacy files (`encrypted` =
+  /// false); NULL for files whose content is encrypted, whose real name
+  /// lives only in `encryptedName`/`nameIv` below.
+  name            String?
   mimeType        String
   sizeBytes       Int
   vaultId         String
@@ -111,6 +130,14 @@ model File {
   wrappedKeyCiphertext String?
   /// Base64-encoded 12-byte IV used for the file-key wrap above.
   wrappedKeyIv         String?
+
+  /// Base64-encoded AES-256-GCM ciphertext of this file's name, encrypted
+  /// directly with the owning vault's DEK (same primitive as content
+  /// encryption, distinct key usage — see `Folder.encryptedName`). Null
+  /// whenever `encrypted` is false.
+  encryptedName String?
+  /// Base64-encoded 12-byte IV used for the name encryption above.
+  nameIv        String?
 
   @@unique([vaultId, folderId, name])
   @@index([vaultId])

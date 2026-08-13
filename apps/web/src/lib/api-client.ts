@@ -138,7 +138,8 @@ export interface CheckUsernameResponse {
 
 export interface FileDTO {
   id: string;
-  name: string;
+  /** Plaintext name. Non-null for a legacy file (`encrypted` false); null when `encrypted` is true. */
+  name: string | null;
   mimeType: string;
   sizeBytes: number;
   vaultId: string;
@@ -150,15 +151,25 @@ export interface FileDTO {
   encrypted: boolean;
   wrappedKeyCiphertext: string | null;
   wrappedKeyIv: string | null;
+  /** Base64-encoded AES-256-GCM ciphertext of the file's name, encrypted directly with the vault DEK. */
+  encryptedName: string | null;
+  /** Base64-encoded 12-byte IV used for the name encryption above. */
+  nameIv: string | null;
 }
 
 export interface FolderDTO {
   id: string;
-  name: string;
+  /** Plaintext name. Non-null for a legacy folder (`encrypted` false); null when `encrypted` is true. */
+  name: string | null;
   vaultId: string;
   parentId: string | null;
   createdAt: string;
   updatedAt: string;
+  encrypted: boolean;
+  /** Base64-encoded AES-256-GCM ciphertext of the folder's name, encrypted directly with the vault DEK. */
+  encryptedName: string | null;
+  /** Base64-encoded 12-byte IV used for the name encryption above. */
+  nameIv: string | null;
 }
 
 export interface FolderContentsResponse {
@@ -169,7 +180,10 @@ export interface FolderContentsResponse {
 
 export interface PathSegment {
   id: string;
-  name: string;
+  name: string | null;
+  encrypted: boolean;
+  encryptedName: string | null;
+  nameIv: string | null;
 }
 
 export interface FolderSearchResult extends FolderDTO {
@@ -184,6 +198,17 @@ export interface SearchResponse {
   folders: FolderSearchResult[];
   files: FileSearchResult[];
 }
+
+/**
+ * A create/rename name payload: a legacy file/folder takes a plaintext
+ * `name`; an encrypted one takes a client-encrypted `{ encryptedName,
+ * nameIv }` pair instead — never a plaintext name. Callers build this by
+ * encrypting client-side first (see `lib/upload/encrypt-upload.ts` and
+ * `lib/names/resolve-name.ts`) when the target vault is encrypted.
+ */
+export type NameInput =
+  | { name: string }
+  | { encryptedName: string; nameIv: string };
 
 export const authApi = {
   checkUsername(username: string): Promise<CheckUsernameResponse> {
@@ -305,7 +330,7 @@ export const folderApi = {
 
   create(
     vaultId: string,
-    name: string,
+    nameInput: NameInput,
     token: string,
     parentId?: string | null
   ): Promise<{ folder: FolderDTO }> {
@@ -316,8 +341,8 @@ export const folderApi = {
         token,
         body: JSON.stringify({
           vaultId,
-          name,
-          parentId
+          parentId,
+          ...nameInput
         })
       }
     );
@@ -325,7 +350,7 @@ export const folderApi = {
 
   rename(
     folderId: string,
-    name: string,
+    nameInput: NameInput,
     token: string
   ): Promise<{ folder: FolderDTO }> {
     return request<{ folder: FolderDTO }>(
@@ -333,7 +358,7 @@ export const folderApi = {
       {
         method: "PATCH",
         token,
-        body: JSON.stringify({ name })
+        body: JSON.stringify(nameInput)
       }
     );
   },
@@ -343,14 +368,25 @@ export const folderApi = {
    * vault; inside a folder, searches only that folder's descendants.
    * Each result carries `path` — the ancestor chain — so the UI can
    * show where a match lives when it isn't in the currently open folder.
+   *
+   * `query: null` requests the unfiltered subtree instead of a filtered
+   * search — used by an encrypted vault's client to fetch the (ciphertext)
+   * candidate set once, then decrypt and filter it locally on every
+   * keystroke, since the server cannot match a query string against
+   * ciphertext. Legacy vaults always pass a real `query` and get the
+   * existing server-side substring-matched behavior.
    */
   search(
     vaultId: string,
-    query: string,
+    query: string | null,
     folderId: string | null,
     token: string
   ): Promise<SearchResponse> {
-    const params = new URLSearchParams({ vaultId, query });
+    const params = new URLSearchParams({ vaultId });
+
+    if (query !== null) {
+      params.set("query", query);
+    }
 
     if (folderId) {
       params.set("folderId", folderId);
@@ -418,14 +454,16 @@ export const fileApi = {
       throw new UnsupportedBrowserError();
     }
 
-    const { ciphertextStream, envelope } = await prepareEncryptedUpload(
-      file,
-      vaultDek
-    );
+    const { ciphertextStream, envelope, encryptedName, nameIv } =
+      await prepareEncryptedUpload(file, vaultDek);
 
+    // Deliberately no plaintext `name` param here — the server must never
+    // receive this file's real name, not even transiently in a URL/query
+    // string that could end up in an access log.
     const params = new URLSearchParams({
       vaultId,
-      name: file.name,
+      encryptedName,
+      nameIv,
       mimeType: file.type || "application/octet-stream",
       encryptionVersion: String(envelope.encryptionVersion),
       wrappedKeyCiphertext: envelope.wrappedKeyCiphertext,
@@ -505,7 +543,7 @@ export const fileApi = {
 
   rename(
     fileId: string,
-    name: string,
+    nameInput: NameInput,
     token: string
   ): Promise<{ file: FileDTO }> {
     return request<{ file: FileDTO }>(
@@ -513,7 +551,7 @@ export const fileApi = {
       {
         method: "PATCH",
         token,
-        body: JSON.stringify({ name })
+        body: JSON.stringify(nameInput)
       }
     );
   }

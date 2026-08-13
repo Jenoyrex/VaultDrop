@@ -27,6 +27,21 @@ function isPreviewable(mimeType: string): boolean {
   );
 }
 
+/**
+ * The `filename` used in a `Content-Disposition` header. For a legacy
+ * file this is its real (plaintext) name, exactly as before. For an
+ * encrypted file, `file.name` is null by construction — falling back to
+ * `file.id` (a random UUID, not derived from or related to the real
+ * name) keeps the header well-formed without ever putting a plaintext
+ * name on the wire here. The browser already knows the real, decrypted
+ * name client-side and re-applies it when saving the downloaded blob
+ * (see `saveBlob` in `apps/web/src/lib/download/decrypt-download.ts`),
+ * so this header's filename is cosmetic for encrypted files, not load-bearing.
+ */
+function contentDispositionFilename(file: { name: string | null; id: string }): string {
+  return file.name ?? file.id;
+}
+
 export function createFileRouter(
   prisma: PrismaClient,
   env: ServerEnv,
@@ -54,10 +69,14 @@ export function createFileRouter(
 
   // Query contract for POST /upload-encrypted. The request body carries
   // ciphertext only, so everything that isn't file content — including
-  // the wrapped (still-encrypted) per-file key — travels as query params
-  // instead of multipart fields.
+  // the wrapped (still-encrypted) per-file key and the encrypted name —
+  // travels as query params instead of multipart fields. Deliberately no
+  // `name` field here: the server must never receive this file's
+  // plaintext name, not even transiently in a URL/query string that
+  // could end up in an access log.
   const encryptedUploadQuerySchema = uploadQuerySchema.extend({
-    name: z.string().min(1).max(255),
+    encryptedName: z.string().min(1),
+    nameIv: z.string().min(1),
     mimeType: z.string().min(1),
     encryptionVersion: z.coerce.number().int().positive(),
     wrappedKeyCiphertext: z.string().min(1),
@@ -100,9 +119,18 @@ export function createFileRouter(
     }
   });
 
-  const renameFileSchema = z.object({
-    name: z.string().min(1).max(255)
-  });
+  // Discriminated rename payload: a legacy file is renamed with a
+  // plaintext `name`; an encrypted file is renamed with a client-encrypted
+  // `{ encryptedName, nameIv }` pair — never a plaintext name. Which shape
+  // is actually allowed for a given file is enforced in FileService against
+  // that file's own `encrypted` flag, not just by this schema.
+  const renameFileSchema = z.union([
+    z.object({ name: z.string().min(1).max(255) }),
+    z.object({
+      encryptedName: z.string().min(1),
+      nameIv: z.string().min(1)
+    })
+  ]);
 
   router.use(requireAuth);
 
@@ -171,17 +199,22 @@ export function createFileRouter(
 
       const query = encryptedUploadQuerySchema.parse(req.query);
 
+      // No plaintext name to check for an encrypted upload — the server
+      // never receives one (see assertCanUpload's doc comment).
       await fileService.assertCanUpload(
         req.user.sub,
         query.vaultId,
         query.folderId ?? null,
-        query.name
+        null
       );
 
+      // Deliberately omits the filename argument: an encrypted upload's
+      // storage key must never embed the plaintext name (it would leak
+      // into the filesystem path / cloud object key / any storage-layer
+      // logging), unlike the legacy path below which still does.
       const storageKey = buildVaultStorageKey(
         query.vaultId,
-        randomUUID(),
-        query.name
+        randomUUID()
       );
 
       // multer's `limits.fileSize` enforces MAX_UPLOAD_BYTES on the legacy
@@ -220,7 +253,8 @@ export function createFileRouter(
       const file = await fileService.finalizeUpload({
         vaultId: query.vaultId,
         folderId: query.folderId ?? null,
-        originalName: query.name,
+        encryptedName: query.encryptedName,
+        nameIv: query.nameIv,
         mimeType: query.mimeType,
         storageKey,
         sizeBytes,
@@ -271,7 +305,7 @@ export function createFileRouter(
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="${encodeURIComponent(
-          file.name
+          contentDispositionFilename(file)
         )}"`
       );
 
@@ -306,13 +340,17 @@ export function createFileRouter(
         res.setHeader("Content-Type", "application/octet-stream");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="${encodeURIComponent(file.name)}"`
+          `attachment; filename="${encodeURIComponent(
+            contentDispositionFilename(file)
+          )}"`
         );
       } else {
         res.setHeader("Content-Type", file.mimeType);
         res.setHeader(
           "Content-Disposition",
-          `inline; filename="${encodeURIComponent(file.name)}"`
+          `inline; filename="${encodeURIComponent(
+            contentDispositionFilename(file)
+          )}"`
         );
       }
 
@@ -330,7 +368,7 @@ export function createFileRouter(
       const file = await fileService.renameFile(
         req.params["fileId"] as string,
         req.user.sub,
-        body.name
+        body
       );
 
       res.status(200).json({ file });
