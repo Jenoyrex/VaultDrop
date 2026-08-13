@@ -6,7 +6,8 @@ import {
   Image as ImageIcon,
   Download,
   Trash2,
-  Pencil
+  Pencil,
+  Lock
 } from "lucide-react";
 
 import {
@@ -58,17 +59,22 @@ export default function FileCard({
   const { base: fileBaseName, extension: fileExtension } =
     splitFileName(file.name);
 
+  // Checkpoint 4 wires up encrypted *uploads* only — encrypted download/
+  // preview is explicitly out of scope until a later checkpoint. An
+  // encrypted file's stored bytes are ciphertext, so previewing/
+  // downloading it today would just hand back undecryptable data; guard
+  // both instead of showing a broken image or a garbage download.
   const { previewUrl } = useFilePreview(
     file.id,
-    file.mimeType,
+    file.encrypted ? "" : file.mimeType,
     accessToken
   );
 
-  const isImage = file.mimeType.startsWith("image/");
-  const isPdf = file.mimeType === "application/pdf";
+  const isImage = !file.encrypted && file.mimeType.startsWith("image/");
+  const isPdf = !file.encrypted && file.mimeType === "application/pdf";
 
   async function handleDownload() {
-    if (!accessToken) return;
+    if (!accessToken || file.encrypted) return;
 
     try {
       const response = await fileApi.download(
@@ -168,8 +174,14 @@ export default function FileCard({
 
         <div className="space-y-2 p-4">
 
-          <h3 className="truncate font-semibold">
-            {file.name}
+          <h3 className="flex items-center gap-1.5 truncate font-semibold">
+            {file.encrypted && (
+              <Lock
+                className="h-3.5 w-3.5 shrink-0 text-primary"
+                aria-label="Encrypted"
+              />
+            )}
+            <span className="truncate">{file.name}</span>
           </h3>
 
           {pathLabel && (
@@ -190,7 +202,13 @@ export default function FileCard({
 
             <button
               onClick={handleDownload}
-              className="rounded-lg border p-2 hover:bg-accent"
+              disabled={file.encrypted}
+              title={
+                file.encrypted
+                  ? "Encrypted files can't be previewed or downloaded yet"
+                  : undefined
+              }
+              className="rounded-lg border p-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             >
               <Download className="h-4 w-4" />
             </button>

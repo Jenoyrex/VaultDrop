@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { Transform } from "node:stream";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
@@ -10,6 +12,7 @@ import { createAuthMiddleware } from "../middleware/auth.js";
 import { AppError } from "../utils/app-error.js";
 import { FileService } from "../services/file.service.js";
 import { StreamingMulterStorageEngine } from "../storage/streaming-multer-storage-engine.js";
+import { buildVaultStorageKey } from "../storage/local-storage-adapter.js";
 
 const PREVIEWABLE_MIME_PREFIXES = ["image/", "text/", "audio/", "video/"];
 const PREVIEWABLE_EXACT_MIME_TYPES = new Set([
@@ -47,6 +50,18 @@ export function createFileRouter(
   const uploadQuerySchema = z.object({
     vaultId: z.string().uuid(),
     folderId: z.string().uuid().optional()
+  });
+
+  // Query contract for POST /upload-encrypted. The request body carries
+  // ciphertext only, so everything that isn't file content — including
+  // the wrapped (still-encrypted) per-file key — travels as query params
+  // instead of multipart fields.
+  const encryptedUploadQuerySchema = uploadQuerySchema.extend({
+    name: z.string().min(1).max(255),
+    mimeType: z.string().min(1),
+    encryptionVersion: z.coerce.number().int().positive(),
+    wrappedKeyCiphertext: z.string().min(1),
+    wrappedKeyIv: z.string().min(1)
   });
 
   // Validates vaultId/folderId before multer starts parsing the
@@ -137,6 +152,81 @@ export function createFileRouter(
           "application/octet-stream",
         storageKey: req.file.path,
         sizeBytes: req.file.size
+      });
+
+      res.status(201).json({ file });
+    })
+  );
+
+  // ✅ UPLOAD (ENCRYPTED) — the request body is the raw ciphertext stream
+  // produced client-side (a 12-byte nonce followed by framed AES-256-GCM
+  // chunks); there is no multipart envelope, so multer isn't used here.
+  // The body is piped straight into `storage.putStream`, mirroring what
+  // `StreamingMulterStorageEngine` does for the legacy path, just without
+  // a multipart part to read it from.
+  router.post(
+    "/upload-encrypted",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+
+      const query = encryptedUploadQuerySchema.parse(req.query);
+
+      await fileService.assertCanUpload(
+        req.user.sub,
+        query.vaultId,
+        query.folderId ?? null,
+        query.name
+      );
+
+      const storageKey = buildVaultStorageKey(
+        query.vaultId,
+        randomUUID(),
+        query.name
+      );
+
+      // multer's `limits.fileSize` enforces MAX_UPLOAD_BYTES on the legacy
+      // path; this route bypasses multer entirely, so the same ceiling is
+      // enforced here on the raw request stream before it reaches storage.
+      let bytesSeen = 0;
+      const enforceMaxSize = new Transform({
+        transform(
+          chunk: Buffer,
+          _encoding: BufferEncoding,
+          callback: (error?: Error | null, data?: Buffer) => void
+        ) {
+          bytesSeen += chunk.length;
+          if (bytesSeen > env.MAX_UPLOAD_BYTES) {
+            callback(AppError.badRequest("File exceeds the maximum upload size"));
+            return;
+          }
+          callback(null, chunk);
+        }
+      });
+
+      let sizeBytes: number;
+
+      try {
+        const meta = await storage.putStream(
+          storageKey,
+          req.pipe(enforceMaxSize),
+          query.mimeType
+        );
+        sizeBytes = meta.sizeBytes;
+      } catch (error) {
+        await storage.delete(storageKey).catch(() => undefined);
+        throw error;
+      }
+
+      const file = await fileService.finalizeUpload({
+        vaultId: query.vaultId,
+        folderId: query.folderId ?? null,
+        originalName: query.name,
+        mimeType: query.mimeType,
+        storageKey,
+        sizeBytes,
+        encrypted: true,
+        wrappedKeyCiphertext: query.wrappedKeyCiphertext,
+        wrappedKeyIv: query.wrappedKeyIv
       });
 
       res.status(201).json({ file });

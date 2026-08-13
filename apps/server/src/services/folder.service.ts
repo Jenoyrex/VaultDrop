@@ -37,6 +37,9 @@ export interface FileSearchResult {
   storageKey: string;
   createdAt: string;
   updatedAt: string;
+  encrypted: boolean;
+  wrappedKeyCiphertext: string | null;
+  wrappedKeyIv: string | null;
   path: PathSegment[];
 }
 
@@ -134,7 +137,10 @@ export class FolderService {
         storageProvider: file.storageProvider,
         storageKey: file.storageKey,
         createdAt: file.createdAt.toISOString(),
-        updatedAt: file.updatedAt.toISOString()
+        updatedAt: file.updatedAt.toISOString(),
+        encrypted: file.encrypted,
+        wrappedKeyCiphertext: file.wrappedKeyCiphertext,
+        wrappedKeyIv: file.wrappedKeyIv
       }))
     };
   }
@@ -271,6 +277,9 @@ export class FolderService {
         storageKey: file.storageKey,
         createdAt: file.createdAt.toISOString(),
         updatedAt: file.updatedAt.toISOString(),
+        encrypted: file.encrypted,
+        wrappedKeyCiphertext: file.wrappedKeyCiphertext,
+        wrappedKeyIv: file.wrappedKeyIv,
         path: pathOf(file.folderId)
       }));
 

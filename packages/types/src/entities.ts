@@ -62,4 +62,18 @@ export interface FileDTO {
   storageKey: string;
   createdAt: string;
   updatedAt: string;
+
+  /**
+   * Zero-knowledge file content encryption metadata. `encrypted` is
+   * `false` (and the wrap fields `null`) for legacy, pre-Phase-1 files
+   * whose bytes are stored as plaintext. When `true`, the file's content
+   * on disk/bucket is AES-256-GCM ciphertext, and `wrappedKeyCiphertext`/
+   * `wrappedKeyIv` hold the per-file content key wrapped by the owning
+   * vault's DEK — opaque to the server, only unwrappable client-side.
+   */
+  encrypted: boolean;
+  /** Base64-encoded AES-256-GCM ciphertext of the per-file key, wrapped by the vault DEK. */
+  wrappedKeyCiphertext: string | null;
+  /** Base64-encoded 12-byte IV used for the vault-DEK wrap above. */
+  wrappedKeyIv: string | null;
 }

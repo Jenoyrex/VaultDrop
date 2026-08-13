@@ -5,6 +5,15 @@ import type {
   VaultDTO,
   VaultEncryptionEnvelope
 } from "@vaultdrop/types";
+import { prepareEncryptedUpload } from "@/lib/upload/encrypt-upload";
+
+/**
+ * `RequestInit["duplex"]` isn't in the TypeScript DOM lib bundled with our
+ * TS version yet, though it's supported at runtime in current browsers —
+ * required to stream a `ReadableStream` request body (see
+ * `fileApi.uploadEncrypted`) without buffering it first.
+ */
+type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
 const env = loadWebEnv({
   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
@@ -28,6 +37,54 @@ interface ApiErrorBody {
     message: string;
     details?: unknown;
   };
+}
+
+export class UnsupportedBrowserError extends Error {
+  constructor() {
+    super(
+      "This browser doesn't support streaming file uploads, which encrypted vaults require."
+    );
+    this.name = "UnsupportedBrowserError";
+  }
+}
+
+let cachedStreamingBodySupport: boolean | null = null;
+
+/**
+ * Feature-detects whether `fetch` can stream a `ReadableStream` request
+ * body (the standard `duplex`-getter probe). Encrypted uploads rely on
+ * this to send ciphertext chunk-by-chunk without ever buffering the whole
+ * encrypted file in memory first; there is no buffered fallback this
+ * checkpoint, so an unsupported browser gets a clear error instead.
+ */
+function supportsStreamingRequestBody(): boolean {
+  if (cachedStreamingBodySupport !== null) {
+    return cachedStreamingBodySupport;
+  }
+
+  if (typeof Request === "undefined" || typeof ReadableStream === "undefined") {
+    cachedStreamingBodySupport = false;
+    return false;
+  }
+
+  let duplexAccessed = false;
+
+  try {
+    const hasContentType = new Request("https://example.com", {
+      method: "POST",
+      body: new ReadableStream(),
+      get duplex() {
+        duplexAccessed = true;
+        return "half";
+      }
+    } as RequestInitWithDuplex).headers.has("Content-Type");
+
+    cachedStreamingBodySupport = duplexAccessed && !hasContentType;
+  } catch {
+    cachedStreamingBodySupport = false;
+  }
+
+  return cachedStreamingBodySupport;
 }
 
 async function request<T>(
@@ -90,6 +147,9 @@ export interface FileDTO {
   storageKey: string;
   createdAt: string;
   updatedAt: string;
+  encrypted: boolean;
+  wrappedKeyCiphertext: string | null;
+  wrappedKeyIv: string | null;
 }
 
 export interface FolderDTO {
@@ -330,6 +390,63 @@ export const fileApi = {
         },
         body: formData
       }
+    );
+
+    if (!response.ok) {
+      throw new Error("Upload failed");
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Encrypts `file` client-side (fresh per-file key, wrapped by
+   * `vaultDek`) and streams the ciphertext to `POST
+   * /files/upload-encrypted` as the raw request body — never as multipart
+   * form data, and never buffered whole in memory first. `vaultDek` must
+   * already be unwrapped (see `useVaultKeys().getVaultKey`); this
+   * function never derives or unwraps it itself.
+   */
+  async uploadEncrypted(
+    vaultId: string,
+    file: File,
+    vaultDek: CryptoKey,
+    token: string,
+    folderId?: string | null
+  ): Promise<{ file: FileDTO }> {
+    if (!supportsStreamingRequestBody()) {
+      throw new UnsupportedBrowserError();
+    }
+
+    const { ciphertextStream, envelope } = await prepareEncryptedUpload(
+      file,
+      vaultDek
+    );
+
+    const params = new URLSearchParams({
+      vaultId,
+      name: file.name,
+      mimeType: file.type || "application/octet-stream",
+      encryptionVersion: String(envelope.encryptionVersion),
+      wrappedKeyCiphertext: envelope.wrappedKeyCiphertext,
+      wrappedKeyIv: envelope.wrappedKeyIv
+    });
+
+    if (folderId) {
+      params.set("folderId", folderId);
+    }
+
+    const response = await fetch(
+      `${env.NEXT_PUBLIC_API_URL}/files/upload-encrypted?${params.toString()}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream"
+        },
+        body: ciphertextStream,
+        duplex: "half"
+      } as RequestInitWithDuplex
     );
 
     if (!response.ok) {

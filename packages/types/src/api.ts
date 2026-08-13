@@ -57,6 +57,20 @@ export interface UpdateFolderRequest {
 
 /* ---------------------------------- File ---------------------------------- */
 
+/**
+ * Zero-knowledge encryption envelope for a single file's content key,
+ * generated entirely client-side (see `apps/web/src/lib/upload`). The
+ * per-file AES-256-GCM key is generated in the browser, used to encrypt
+ * the file content, then wrapped by the caller's already-unwrapped vault
+ * DEK — the server only ever receives this wrapped (ciphertext) form, via
+ * query params on `POST /files/upload-encrypted`, never the raw key.
+ */
+export interface FileEncryptionEnvelope {
+  encryptionVersion: number;
+  wrappedKeyCiphertext: string;
+  wrappedKeyIv: string;
+}
+
 export interface FileUploadMetadataResponse {
   file: FileDTO;
 }

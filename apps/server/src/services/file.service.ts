@@ -16,7 +16,10 @@ function toFileDTO(file: PrismaFile): FileDTO {
     storageProvider: file.storageProvider,
     storageKey: file.storageKey,
     createdAt: file.createdAt.toISOString(),
-    updatedAt: file.updatedAt.toISOString()
+    updatedAt: file.updatedAt.toISOString(),
+    encrypted: file.encrypted,
+    wrappedKeyCiphertext: file.wrappedKeyCiphertext,
+    wrappedKeyIv: file.wrappedKeyIv
   };
 }
 
@@ -27,6 +30,15 @@ export interface FinalizeUploadInput {
   mimeType: string;
   storageKey: string;
   sizeBytes: number;
+  /**
+   * Zero-knowledge content-encryption metadata for this file, supplied by
+   * `POST /files/upload-encrypted`. Omitted (or `encrypted: false`) for a
+   * legacy plaintext upload via `POST /files/upload`, which keeps the
+   * `File` row's wrap fields at their DB-column defaults (`false`/`null`).
+   */
+  encrypted?: boolean;
+  wrappedKeyCiphertext?: string;
+  wrappedKeyIv?: string;
 }
 
 export class FileService {
@@ -98,7 +110,10 @@ export class FileService {
         vaultId: input.vaultId,
         folderId: input.folderId,
         storageProvider: this.storageDriverLabel,
-        storageKey: input.storageKey
+        storageKey: input.storageKey,
+        encrypted: input.encrypted ?? false,
+        wrappedKeyCiphertext: input.wrappedKeyCiphertext ?? null,
+        wrappedKeyIv: input.wrappedKeyIv ?? null
       }
     });
 

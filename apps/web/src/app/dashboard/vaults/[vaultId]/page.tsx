@@ -24,6 +24,7 @@ import {
   fileApi,
   folderApi,
   vaultApi,
+  UnsupportedBrowserError,
   type FileDTO,
   type FolderDTO,
   type SearchResponse
@@ -45,7 +46,7 @@ const VAULT_ROOT_CRUMB: BreadcrumbEntry = { id: null, name: "Vault" };
 export default function VaultPage() {
   const params = useParams();
   const { accessToken } = useAuth();
-  const { isUnlocked } = useVaultKeys();
+  const { isUnlocked, getVaultKey } = useVaultKeys();
 
   const vaultId = params.vaultId as string;
 
@@ -212,29 +213,55 @@ export default function VaultPage() {
     async (filesToUpload: File[]) => {
       if (!accessToken || filesToUpload.length === 0) return;
 
+      // Files uploaded into an encrypted vault are always encrypted
+      // client-side first; legacy (non-encrypted) vaults keep uploading
+      // plaintext exactly as before. The upload UI only renders once
+      // `!needsUnlock`, so an encrypted vault's DEK is guaranteed to
+      // already be unlocked here.
+      const encryptedVault = vault !== null && hasEncryptionEnvelope(vault);
+      const vaultDek = encryptedVault ? getVaultKey(vaultId) : undefined;
+
+      if (encryptedVault && !vaultDek) {
+        console.error("Encrypted vault has no unlocked key in memory");
+        alert("Upload failed. Please unlock the vault and try again.");
+        return;
+      }
+
       try {
         setUploading(true);
 
         await Promise.all(
           filesToUpload.map((file) =>
-            fileApi.upload(
-              vaultId,
-              file,
-              accessToken,
-              currentFolderId
-            )
+            vaultDek
+              ? fileApi.uploadEncrypted(
+                  vaultId,
+                  file,
+                  vaultDek,
+                  accessToken,
+                  currentFolderId
+                )
+              : fileApi.upload(
+                  vaultId,
+                  file,
+                  accessToken,
+                  currentFolderId
+                )
           )
         );
 
         await loadContents(currentFolderId);
       } catch (err) {
         console.error(err);
-        alert("Upload failed.");
+        alert(
+          err instanceof UnsupportedBrowserError
+            ? err.message
+            : "Upload failed."
+        );
       } finally {
         setUploading(false);
       }
     },
-    [accessToken, vaultId, currentFolderId, loadContents]
+    [accessToken, vault, vaultId, currentFolderId, loadContents, getVaultKey]
   );
 
   async function handleUpload(
