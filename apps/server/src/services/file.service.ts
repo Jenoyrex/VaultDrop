@@ -4,7 +4,6 @@ import type { FileDTO } from "@vaultdrop/types";
 import { AppError } from "../utils/app-error.js";
 import { VaultService } from "./vault.service.js";
 import { FolderService } from "./folder.service.js";
-import { buildVaultStorageKey } from "../storage/local-storage-adapter.js";
 
 function toFileDTO(file: PrismaFile): FileDTO {
   return {
@@ -21,12 +20,13 @@ function toFileDTO(file: PrismaFile): FileDTO {
   };
 }
 
-export interface UploadFileInput {
+export interface FinalizeUploadInput {
   vaultId: string;
   folderId: string | null;
   originalName: string;
   mimeType: string;
-  buffer: Buffer;
+  storageKey: string;
+  sizeBytes: number;
 }
 
 export class FileService {
@@ -42,78 +42,67 @@ export class FileService {
     this.folderService = new FolderService(prisma);
   }
 
-  async uploadFile(ownerId: string, input: UploadFileInput): Promise<FileDTO> {
-    await this.vaultService.getOwnedVaultOrThrow(input.vaultId, ownerId);
+  /**
+   * Validates that `ownerId` may upload a file named `originalName` into
+   * `folderId` (or the vault root) of `vaultId` — vault ownership, folder
+   * ownership/vault match, and duplicate-name conflict. Throws exactly
+   * the same errors the old, pre-streaming `uploadFile` used to throw
+   * before writing anything to storage. Called by the streaming storage
+   * engine *before* any bytes are streamed, so an invalid upload is
+   * rejected without ever touching storage.
+   */
+  async assertCanUpload(
+    ownerId: string,
+    vaultId: string,
+    folderId: string | null,
+    originalName: string
+  ): Promise<void> {
+    await this.vaultService.getOwnedVaultOrThrow(vaultId, ownerId);
 
-    if (input.folderId) {
+    if (folderId) {
       const folder = await this.folderService.getFolderOrThrow(
-        input.folderId,
+        folderId,
         ownerId
       );
 
-      if (folder.vaultId !== input.vaultId) {
+      if (folder.vaultId !== vaultId) {
         throw AppError.badRequest("Folder does not belong to this vault");
       }
     }
 
     const existing = await this.prisma.file.findFirst({
       where: {
-        vaultId: input.vaultId,
-        folderId: input.folderId,
-        name: input.originalName
+        vaultId,
+        folderId,
+        name: originalName
       }
     });
 
     if (existing) {
       throw AppError.conflict("A file with this name already exists here");
     }
+  }
 
+  /**
+   * Records a file whose bytes have *already* been streamed to storage
+   * (by the streaming storage engine, after `assertCanUpload` passed).
+   * A single `create` call — no placeholder storageKey, no follow-up
+   * update, since everything needed is already known by this point.
+   */
+  async finalizeUpload(input: FinalizeUploadInput): Promise<FileDTO> {
     const file = await this.prisma.file.create({
       data: {
         name: input.originalName,
         mimeType: input.mimeType,
-        sizeBytes: input.buffer.byteLength,
+        sizeBytes: input.sizeBytes,
         vaultId: input.vaultId,
         folderId: input.folderId,
         storageProvider: this.storageDriverLabel,
-        storageKey: "pending"
+        storageKey: input.storageKey
       }
     });
 
-    const storageKey = buildVaultStorageKey(
-      input.vaultId,
-      file.id,
-      input.originalName
-    );
-
-    try {
-      await this.storage.put({
-        key: storageKey,
-        data: input.buffer,
-        contentType: input.mimeType
-      });
-    } catch (error) {
-      await this.prisma.file
-        .delete({
-          where: {
-            id: file.id
-          }
-        })
-        .catch(() => undefined);
-
-      throw error;
-    }
-
-    const updated = await this.prisma.file.update({
-      where: {
-        id: file.id
-      },
-      data: {
-        storageKey
-      }
-    });
-
-    return toFileDTO(updated);
+    return toFileDTO(file);
   }
 
   async getFileOrThrow(

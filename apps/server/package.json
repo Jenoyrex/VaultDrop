@@ -11,10 +11,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
     "prisma:generate": "prisma generate",
-"prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.679.0",
+    "@aws-sdk/client-s3": "^3.1109.0",
+    "@aws-sdk/lib-storage": "^3.679.0",
     "@aws-sdk/s3-request-presigner": "^3.679.0",
     "@prisma/client": "^5.22.0",
     "@vaultdrop/config": "workspace:*",

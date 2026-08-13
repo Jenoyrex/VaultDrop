@@ -5,7 +5,9 @@ import {
   PutObjectCommand,
   S3Client
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import type { StorageAdapter, StorageObjectMeta, StoragePutInput } from "@vaultdrop/types";
+import { CountingPassThrough } from "./counting-stream.js";
 
 export interface CloudStorageAdapterOptions {
   bucket: string;
@@ -50,6 +52,33 @@ export class CloudStorageAdapter implements StorageAdapter {
       key: input.key,
       sizeBytes: input.data.byteLength,
       contentType: input.contentType
+    };
+  }
+
+  async putStream(
+    key: string,
+    data: NodeJS.ReadableStream,
+    contentType: string
+  ): Promise<StorageObjectMeta> {
+    const counter = new CountingPassThrough();
+    data.pipe(counter);
+
+    const upload = new Upload({
+      client: this.client,
+      params: {
+        Bucket: this.bucket,
+        Key: key,
+        Body: counter,
+        ContentType: contentType
+      }
+    });
+
+    await upload.done();
+
+    return {
+      key,
+      sizeBytes: counter.bytesWritten,
+      contentType
     };
   }
 

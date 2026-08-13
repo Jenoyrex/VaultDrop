@@ -1,6 +1,7 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { StorageAdapter, StorageObjectMeta, StoragePutInput } from "@vaultdrop/types";
 
 /**
@@ -31,6 +32,24 @@ export class LocalStorageAdapter implements StorageAdapter {
       key: input.key,
       sizeBytes: input.data.byteLength,
       contentType: input.contentType
+    };
+  }
+
+  async putStream(
+    key: string,
+    data: NodeJS.ReadableStream,
+    contentType: string
+  ): Promise<StorageObjectMeta> {
+    const fullPath = this.resolveKeyPath(key);
+    await mkdir(dirname(fullPath), { recursive: true });
+
+    const writeStream = createWriteStream(fullPath);
+    await pipeline(data, writeStream);
+
+    return {
+      key,
+      sizeBytes: writeStream.bytesWritten,
+      contentType
     };
   }
 

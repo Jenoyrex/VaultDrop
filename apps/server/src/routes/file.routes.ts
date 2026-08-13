@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
@@ -8,6 +9,7 @@ import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { AppError } from "../utils/app-error.js";
 import { FileService } from "../services/file.service.js";
+import { StreamingMulterStorageEngine } from "../storage/streaming-multer-storage-engine.js";
 
 const PREVIEWABLE_MIME_PREFIXES = ["image/", "text/", "audio/", "video/"];
 const PREVIEWABLE_EXACT_MIME_TYPES = new Set([
@@ -42,16 +44,45 @@ export function createFileRouter(
 
   const requireAuth = createAuthMiddleware(env);
 
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-      fileSize: env.MAX_UPLOAD_BYTES
-    }
-  });
-
   const uploadQuerySchema = z.object({
     vaultId: z.string().uuid(),
     folderId: z.string().uuid().optional()
+  });
+
+  // Validates vaultId/folderId before multer starts parsing the
+  // multipart body at all, so a malformed request 400s immediately
+  // instead of failing deep inside the streaming upload path.
+  function validateUploadQuery(
+    req: Request,
+    _res: Response,
+    next: NextFunction
+  ): void {
+    try {
+      uploadQuerySchema.parse(req.query);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  const streamingStorageEngine = new StreamingMulterStorageEngine(
+    storage,
+    fileService,
+    (req) => {
+      if (!req.user) throw AppError.unauthorized();
+      return req.user.sub;
+    },
+    (req) => {
+      const query = uploadQuerySchema.parse(req.query);
+      return { vaultId: query.vaultId, folderId: query.folderId ?? null };
+    }
+  );
+
+  const upload = multer({
+    storage: streamingStorageEngine,
+    limits: {
+      fileSize: env.MAX_UPLOAD_BYTES
+    }
   });
 
   const renameFileSchema = z.object({
@@ -84,6 +115,7 @@ export function createFileRouter(
   // ✅ UPLOAD
   router.post(
     "/upload",
+    validateUploadQuery,
     upload.single("file"),
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
@@ -96,18 +128,16 @@ export function createFileRouter(
         );
       }
 
-      const file = await fileService.uploadFile(
-        req.user.sub,
-        {
-          vaultId: query.vaultId,
-          folderId: query.folderId ?? null,
-          originalName: req.file.originalname,
-          mimeType:
-            req.file.mimetype ||
-            "application/octet-stream",
-          buffer: req.file.buffer
-        }
-      );
+      const file = await fileService.finalizeUpload({
+        vaultId: query.vaultId,
+        folderId: query.folderId ?? null,
+        originalName: req.file.originalname,
+        mimeType:
+          req.file.mimetype ||
+          "application/octet-stream",
+        storageKey: req.file.path,
+        sizeBytes: req.file.size
+      });
 
       res.status(201).json({ file });
     })

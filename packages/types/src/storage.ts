@@ -24,6 +24,16 @@ export interface StorageAdapter {
   /** Persist an object and return its metadata as actually stored. */
   put(input: StoragePutInput): Promise<StorageObjectMeta>;
 
+  /**
+   * Persist an object from a readable stream, without buffering the
+   * whole thing into memory first. Used by the streaming upload path.
+   */
+  putStream(
+    key: string,
+    data: NodeJS.ReadableStream,
+    contentType: string
+  ): Promise<StorageObjectMeta>;
+
   /** Retrieve the full contents of an object as a Buffer. */
   get(key: string): Promise<Buffer>;
 
