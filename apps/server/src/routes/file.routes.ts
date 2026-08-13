@@ -150,7 +150,7 @@ export function createFileRouter(
 
       const file =
         await fileService.getFileMetadata(
-          req.params.fileId,
+          req.params["fileId"] as string,
           req.user.sub
         );
 
@@ -165,7 +165,7 @@ export function createFileRouter(
 
       const { stream, file } =
         await fileService.getFileStream(
-          req.params.fileId,
+          req.params["fileId"] as string,
           req.user.sub
         );
 
@@ -192,7 +192,7 @@ export function createFileRouter(
 
       const { stream, file } =
         await fileService.getFileStream(
-          req.params.fileId,
+          req.params["fileId"] as string,
           req.user.sub
         );
 
@@ -228,7 +228,7 @@ export function createFileRouter(
       const body = renameFileSchema.parse(req.body);
 
       const file = await fileService.renameFile(
-        req.params.fileId,
+        req.params["fileId"] as string,
         req.user.sub,
         body.name
       );
@@ -243,7 +243,7 @@ export function createFileRouter(
       if (!req.user) throw AppError.unauthorized();
 
       await fileService.deleteFile(
-        req.params.fileId,
+        req.params["fileId"] as string,
         req.user.sub
       );
 

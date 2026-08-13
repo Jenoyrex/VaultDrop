@@ -26,6 +26,7 @@ import {
 } from "@/lib/api-client";
 
 import FileCard from "@/components/file/FileCard";
+import FolderCard from "@/components/folder/FolderCard";
 import FolderGrid from "@/components/folder/FolderGrid";
 import CreateFolderDialog from "@/components/folder/CreateFolderDialog";
 
