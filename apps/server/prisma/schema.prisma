@@ -28,6 +28,40 @@ model Vault {
   folders   Folder[]
   owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
+  /// Zero-knowledge encryption envelope. NULL on every column below means
+  /// this is a legacy, pre-Phase-1 vault with no client-side encryption —
+  /// its files are stored and served as plaintext, unchanged. A vault is
+  /// only ever encrypted at creation time; there is no in-place migration.
+  /// Identifies which version of the client-side encryption scheme (KDF
+  /// choice, wrap construction, chunk framing) this vault's envelope was
+  /// created under, so a future scheme change can be introduced without
+  /// ambiguity about how to interpret existing vaults. NULL alongside the
+  /// rest of this block means "no envelope, legacy vault" (not "version
+  /// 0"); populated vaults are expected to set this from vault-creation
+  /// time onward.
+  encryptionVersion Int?
+  /// Base64-encoded 16-byte random PBKDF2 salt used to derive the KEK.
+  kekSalt           String?
+  /// PBKDF2 iteration count used to derive the KEK (see DEFAULT_KDF_ITERATIONS).
+  kekIterations     Int?
+  /// PBKDF2 hash algorithm used to derive the KEK, e.g. "SHA-256".
+  kekHash           String?
+
+  /// Base64-encoded AES-256-GCM ciphertext of the vault DEK, wrapped by
+  /// the KEK derived from the user's current password.
+  wrappedDekCiphertext String?
+  /// Base64-encoded 12-byte IV used for the KEK-wrap above.
+  wrappedDekIv         String?
+
+  /// Base64-encoded AES-256-GCM ciphertext of the same vault DEK, wrapped
+  /// instead by a one-time recovery key shown to the user at enrollment
+  /// and never sent to or stored by the server. This is the only path
+  /// back into a vault if the user's password is lost, since a normal
+  /// password reset cannot recover the KEK.
+  recoveryWrappedDekCiphertext String?
+  /// Base64-encoded 12-byte IV used for the recovery-key-wrap above.
+  recoveryWrappedDekIv         String?
+
   @@index([ownerId])
   @@map("vaults")
 }
@@ -63,6 +97,20 @@ model File {
   updatedAt       DateTime        @updatedAt
   folder          Folder?         @relation(fields: [folderId], references: [id], onDelete: Cascade)
   vault           Vault           @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+
+  /// True if `storageKey` points to client-side AES-256-GCM-encrypted
+  /// bytes (chunked-cipher framed, decryptable only with `wrappedKey*`
+  /// unwrapped via the owning vault's DEK). False (the default) means
+  /// this file predates Phase 1 or was uploaded to an unencrypted legacy
+  /// vault, and its stored bytes are plain — download/preview must not
+  /// attempt to decrypt it.
+  encrypted            Boolean @default(false)
+  /// Base64-encoded AES-256-GCM ciphertext of this file's own random
+  /// content-encryption key, wrapped by the owning vault's DEK. Null
+  /// whenever `encrypted` is false.
+  wrappedKeyCiphertext String?
+  /// Base64-encoded 12-byte IV used for the file-key wrap above.
+  wrappedKeyIv         String?
 
   @@unique([vaultId, folderId, name])
   @@index([vaultId])
