@@ -1,11 +1,12 @@
 /**
  * Browser-only, zero-knowledge encryption primitives for VaultDrop.
  *
- * Phase 0 status: this module is built and unit-tested in isolation.
- * It is NOT imported anywhere else in the application yet — no UI, no
- * API calls, and no uploaded/downloaded file ever passes through this
- * module today. Wiring it in is explicitly out of scope until a later,
- * separately-approved phase.
+ * As of Phase 1 Checkpoint 3, this module is wired into vault creation
+ * and vault unlock (see `lib/vault-keys.ts` and
+ * `components/providers/vault-key-provider.tsx`) to derive KEKs and
+ * hold unwrapped vault DEKs in browser memory only. File upload/download
+ * encryption and recovery are still not wired in — that remains scope
+ * for a later, separately-approved checkpoint.
  */
 
 export * from "./types.js";

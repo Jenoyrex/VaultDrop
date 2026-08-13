@@ -2,7 +2,8 @@ import { loadWebEnv } from "@vaultdrop/config";
 import type {
   AuthResponse,
   UserDTO,
-  VaultDTO
+  VaultDTO,
+  VaultEncryptionEnvelope
 } from "@vaultdrop/types";
 
 const env = loadWebEnv({
@@ -179,11 +180,21 @@ export const vaultApi = {
     });
   },
 
-  create(name: string, token: string): Promise<{ vault: VaultDTO }> {
+  /**
+   * `encryption`, when supplied, is the client-generated zero-knowledge
+   * envelope (wrapped DEK + KDF params) for a new encrypted vault — see
+   * `lib/crypto/vault-keys.ts`. Omit it to create a legacy plaintext
+   * vault, unchanged from before this checkpoint.
+   */
+  create(
+    name: string,
+    token: string,
+    encryption?: VaultEncryptionEnvelope
+  ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>("/vaults", {
       method: "POST",
       token,
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ name, encryption })
     });
   },
 

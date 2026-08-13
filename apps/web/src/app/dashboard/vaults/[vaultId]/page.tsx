@@ -16,10 +16,14 @@ import {
   X
 } from "lucide-react";
 
+import type { VaultDTO } from "@vaultdrop/types";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useVaultKeys } from "@/components/providers/vault-key-provider";
+import { hasEncryptionEnvelope } from "@/lib/vault-keys";
 import {
   fileApi,
   folderApi,
+  vaultApi,
   type FileDTO,
   type FolderDTO,
   type SearchResponse
@@ -29,6 +33,7 @@ import FileCard from "@/components/file/FileCard";
 import FolderCard from "@/components/folder/FolderCard";
 import FolderGrid from "@/components/folder/FolderGrid";
 import CreateFolderDialog from "@/components/folder/CreateFolderDialog";
+import UnlockVaultGate from "@/components/vault/UnlockVaultGate";
 
 interface BreadcrumbEntry {
   id: string | null;
@@ -40,10 +45,14 @@ const VAULT_ROOT_CRUMB: BreadcrumbEntry = { id: null, name: "Vault" };
 export default function VaultPage() {
   const params = useParams();
   const { accessToken } = useAuth();
+  const { isUnlocked } = useVaultKeys();
 
   const vaultId = params.vaultId as string;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [vault, setVault] = useState<VaultDTO | null>(null);
+  const [vaultLoading, setVaultLoading] = useState(true);
 
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbEntry[]>([
     VAULT_ROOT_CRUMB
@@ -98,6 +107,32 @@ export default function VaultPage() {
   useEffect(() => {
     setBreadcrumbs([VAULT_ROOT_CRUMB]);
   }, [vaultId]);
+
+  const loadVault = useCallback(async () => {
+    if (!accessToken) {
+      setVaultLoading(false);
+      return;
+    }
+
+    try {
+      setVaultLoading(true);
+      const response = await vaultApi.get(vaultId, accessToken);
+      setVault(response.vault);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setVaultLoading(false);
+    }
+  }, [accessToken, vaultId]);
+
+  useEffect(() => {
+    loadVault();
+  }, [loadVault]);
+
+  // Null on a legacy (pre-encryption) vault, so it never gates — this
+  // vault's contents load and render exactly as before this checkpoint.
+  const needsUnlock =
+    vault !== null && hasEncryptionEnvelope(vault) && !isUnlocked(vault.id);
 
   useEffect(() => {
     loadContents(currentFolderId);
@@ -300,46 +335,61 @@ export default function VaultPage() {
 
           </div>
 
-          <div className="flex gap-3">
+          {!needsUnlock && !vaultLoading && (
+            <div className="flex gap-3">
 
-            <button
-              onClick={() => setShowFolderDialog(true)}
-              className="flex items-center gap-2 rounded-lg border px-5 py-3"
-            >
-              <FolderPlus className="h-5 w-5" />
-              New Folder
-            </button>
+              <button
+                onClick={() => setShowFolderDialog(true)}
+                className="flex items-center gap-2 rounded-lg border px-5 py-3"
+              >
+                <FolderPlus className="h-5 w-5" />
+                New Folder
+              </button>
 
-            <input
-              hidden
-              ref={fileInputRef}
-              type="file"
-              onChange={handleUpload}
-            />
+              <input
+                hidden
+                ref={fileInputRef}
+                type="file"
+                onChange={handleUpload}
+              />
 
-            <button
-              disabled={uploading}
-              onClick={() =>
-                fileInputRef.current?.click()
-              }
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-primary-foreground"
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-5 w-5" />
-                  Upload File
-                </>
-              )}
-            </button>
+              <button
+                disabled={uploading}
+                onClick={() =>
+                  fileInputRef.current?.click()
+                }
+                className="flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-primary-foreground"
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-5 w-5" />
+                    Upload File
+                  </>
+                )}
+              </button>
 
-          </div>
+            </div>
+          )}
 
         </div>
+
+        {vaultLoading ? (
+
+          <div className="flex justify-center py-20">
+            <Loader2 className="h-10 w-10 animate-spin" />
+          </div>
+
+        ) : needsUnlock ? (
+
+          <UnlockVaultGate vault={vault!} onUnlocked={() => {}} />
+
+        ) : (
+          <>
 
         <nav className="flex flex-wrap items-center gap-1 text-sm">
           {breadcrumbs.map((crumb, index) => {
@@ -541,6 +591,9 @@ export default function VaultPage() {
           )}
 
         </div>
+
+          </>
+        )}
 
       </div>
 

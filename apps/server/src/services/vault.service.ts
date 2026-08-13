@@ -1,5 +1,5 @@
 import type { PrismaClient, Vault } from "@prisma/client";
-import type { VaultDTO } from "@vaultdrop/types";
+import type { VaultDTO, VaultEncryptionEnvelope } from "@vaultdrop/types";
 import { AppError } from "../utils/app-error.js";
 
 function toVaultDTO(vault: Vault): VaultDTO {
@@ -23,9 +23,26 @@ function toVaultDTO(vault: Vault): VaultDTO {
 export class VaultService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async createVault(ownerId: string, name: string): Promise<VaultDTO> {
+  async createVault(
+    ownerId: string,
+    name: string,
+    encryption?: VaultEncryptionEnvelope
+  ): Promise<VaultDTO> {
     const vault = await this.prisma.vault.create({
-      data: { name, ownerId }
+      data: {
+        name,
+        ownerId,
+        ...(encryption
+          ? {
+              encryptionVersion: encryption.encryptionVersion,
+              kekSalt: encryption.kekSalt,
+              kekIterations: encryption.kekIterations,
+              kekHash: encryption.kekHash,
+              wrappedDekCiphertext: encryption.wrappedDekCiphertext,
+              wrappedDekIv: encryption.wrappedDekIv
+            }
+          : {})
+      }
     });
     return toVaultDTO(vault);
   }

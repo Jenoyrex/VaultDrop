@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { ApiError, vaultApi } from "@/lib/api-client";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useVaultKeys } from "@/components/providers/vault-key-provider";
+import { createVaultEnvelope } from "@/lib/vault-keys";
 
 interface CreateVaultDialogProps {
   onClose: () => void;
@@ -14,8 +16,10 @@ export default function CreateVaultDialog({
   onCreated,
 }: CreateVaultDialogProps) {
   const { accessToken } = useAuth();
+  const { setVaultKey } = useVaultKeys();
 
   const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -30,11 +34,29 @@ export default function CreateVaultDialog({
       return;
     }
 
+    if (!password) {
+      setError("Please enter your account password to encrypt this vault.");
+      return;
+    }
+
     try {
       setLoading(true);
       setError("");
 
-      await vaultApi.create(name.trim(), accessToken);
+      // Generated and wrapped entirely client-side — only the resulting
+      // ciphertext/KDF-param envelope (never the password, KEK, or DEK
+      // itself) is sent to the server as part of vault creation.
+      const { dek, envelope } = await createVaultEnvelope(password);
+
+      const { vault } = await vaultApi.create(
+        name.trim(),
+        accessToken,
+        envelope
+      );
+
+      // The DEK was just generated in this tab, so hold it as already
+      // unlocked rather than forcing an immediate re-prompt.
+      setVaultKey(vault.id, dek);
 
       onCreated();
       onClose();
@@ -77,6 +99,25 @@ export default function CreateVaultDialog({
           type="text"
           placeholder="Personal Vault"
           className="mt-5 w-full rounded-lg border p-3 outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <p className="mt-4 text-sm text-gray-500">
+          Confirm your account password to encrypt it. This never leaves
+          your browser.
+        </p>
+
+        <input
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              handleCreate();
+            }
+          }}
+          type="password"
+          autoComplete="current-password"
+          placeholder="Account password"
+          className="mt-2 w-full rounded-lg border p-3 outline-none focus:ring-2 focus:ring-violet-500"
         />
 
         {error && (
