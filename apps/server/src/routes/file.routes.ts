@@ -259,9 +259,13 @@ export function createFileRouter(
           req.user.sub
         );
 
+      // Encrypted files: the stored bytes are ciphertext, decryptable only
+      // client-side. Serve them as opaque application/octet-stream — never
+      // label ciphertext with the file's real mime type — so the server
+      // can never be the thing that presents ciphertext as plaintext.
       res.setHeader(
         "Content-Type",
-        file.mimeType
+        file.encrypted ? "application/octet-stream" : file.mimeType
       );
 
       res.setHeader(
@@ -294,17 +298,23 @@ export function createFileRouter(
         );
       }
 
-      res.setHeader(
-        "Content-Type",
-        file.mimeType
-      );
-
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="${encodeURIComponent(
-          file.name
-        )}"`
-      );
+      // Same rule as /download: ciphertext is always opaque
+      // application/octet-stream, and served as an attachment rather than
+      // inline — it isn't safe to render, and the browser must decrypt it
+      // client-side before ever treating the bytes as file.mimeType.
+      if (file.encrypted) {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${encodeURIComponent(file.name)}"`
+        );
+      } else {
+        res.setHeader("Content-Type", file.mimeType);
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="${encodeURIComponent(file.name)}"`
+        );
+      }
 
       stream.pipe(res);
     })

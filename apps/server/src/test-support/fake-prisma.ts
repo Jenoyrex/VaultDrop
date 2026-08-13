@@ -62,6 +62,9 @@ export function createFakePrisma(seedVaults: FakeVaultRow[]): {
           ) ?? null
         );
       },
+      async findUnique({ where }: { where: { id: string } }) {
+        return files.find((file) => file.id === where.id) ?? null;
+      },
       async create({ data }: { data: CreateFileData }) {
         const now = new Date();
         const row: FakeFileRow = {

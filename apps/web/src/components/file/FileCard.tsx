@@ -16,7 +16,9 @@ import {
 } from "@/lib/api-client";
 
 import { useAuth } from "@/components/providers/auth-provider";
+import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { useFilePreview } from "@/hooks/useFilePreview";
+import { fetchFileBlob, saveBlob } from "@/lib/download/decrypt-download";
 import ImageViewer from "./ImageViewer";
 import PdfViewer from "./PdfViewer";
 import RenameDialog from "@/components/shared/RenameDialog";
@@ -52,6 +54,7 @@ export default function FileCard({
 }: FileCardProps) {
 
   const { accessToken } = useAuth();
+  const { getVaultKey } = useVaultKeys();
 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -59,46 +62,24 @@ export default function FileCard({
   const { base: fileBaseName, extension: fileExtension } =
     splitFileName(file.name);
 
-  // Checkpoint 4 wires up encrypted *uploads* only — encrypted download/
-  // preview is explicitly out of scope until a later checkpoint. An
-  // encrypted file's stored bytes are ciphertext, so previewing/
-  // downloading it today would just hand back undecryptable data; guard
-  // both instead of showing a broken image or a garbage download.
-  const { previewUrl } = useFilePreview(
-    file.id,
-    file.encrypted ? "" : file.mimeType,
-    accessToken
-  );
+  // Only relevant for encrypted files — this tab's in-memory unwrapped
+  // vault DEK, if the vault is currently unlocked. `FileCard` is only ever
+  // rendered once its vault's contents are shown, which the vault page
+  // already gates behind `UnlockVaultGate`, so this is expected to be
+  // defined whenever `file.encrypted` is true.
+  const vaultDek = file.encrypted ? getVaultKey(file.vaultId) : undefined;
 
-  const isImage = !file.encrypted && file.mimeType.startsWith("image/");
-  const isPdf = !file.encrypted && file.mimeType === "application/pdf";
+  const { previewUrl } = useFilePreview(file, accessToken, vaultDek);
+
+  const isImage = file.mimeType.startsWith("image/");
+  const isPdf = file.mimeType === "application/pdf";
 
   async function handleDownload() {
-    if (!accessToken || file.encrypted) return;
+    if (!accessToken) return;
 
     try {
-      const response = await fileApi.download(
-        file.id,
-        accessToken
-      );
-
-      if (!response.ok) {
-        throw new Error();
-      }
-
-      const blob = await response.blob();
-
-      const url = URL.createObjectURL(blob);
-
-      const a = document.createElement("a");
-
-      a.href = url;
-      a.download = file.name;
-
-      a.click();
-
-      URL.revokeObjectURL(url);
-
+      const blob = await fetchFileBlob(file, accessToken, vaultDek);
+      saveBlob(blob, file.name);
     } catch {
       alert("Download failed.");
     }
@@ -202,12 +183,6 @@ export default function FileCard({
 
             <button
               onClick={handleDownload}
-              disabled={file.encrypted}
-              title={
-                file.encrypted
-                  ? "Encrypted files can't be previewed or downloaded yet"
-                  : undefined
-              }
               className="rounded-lg border p-2 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             >
               <Download className="h-4 w-4" />

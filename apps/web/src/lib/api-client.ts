@@ -479,6 +479,17 @@ export const fileApi = {
     );
   },
 
+  preview(fileId: string, token: string) {
+    return fetch(
+      `${env.NEXT_PUBLIC_API_URL}/files/${fileId}/preview`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+  },
+
   delete(
     fileId: string,
     token: string
