@@ -4,10 +4,15 @@ import type { PrismaClient } from "@prisma/client";
 import type { ServerEnv } from "@vaultdrop/config";
 import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
+import type { RateLimitRequestHandler } from "express-rate-limit";
 import { AppError } from "../utils/app-error.js";
 import { VaultService } from "../services/vault.service.js";
 
-export function createVaultRouter(prisma: PrismaClient, env: ServerEnv): Router {
+export function createVaultRouter(
+  prisma: PrismaClient,
+  env: ServerEnv,
+  generalApiLimiter: RateLimitRequestHandler
+): Router {
   const router = Router();
   const vaultService = new VaultService(prisma);
   const requireAuth = createAuthMiddleware(env);
@@ -42,6 +47,7 @@ export function createVaultRouter(prisma: PrismaClient, env: ServerEnv): Router 
   });
 
   router.use(requireAuth);
+  router.use(generalApiLimiter);
 
   router.post(
     "/",

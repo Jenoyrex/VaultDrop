@@ -4,10 +4,15 @@ import type { PrismaClient } from "@prisma/client";
 import type { ServerEnv } from "@vaultdrop/config";
 import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
+import type { RateLimitRequestHandler } from "express-rate-limit";
 import { AppError } from "../utils/app-error.js";
 import { FolderService } from "../services/folder.service.js";
 
-export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router {
+export function createFolderRouter(
+  prisma: PrismaClient,
+  env: ServerEnv,
+  generalApiLimiter: RateLimitRequestHandler
+): Router {
   const router = Router();
   const folderService = new FolderService(prisma);
   const requireAuth = createAuthMiddleware(env);
@@ -66,6 +71,7 @@ export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router
   });
 
   router.use(requireAuth);
+  router.use(generalApiLimiter);
 
   router.post(
     "/",

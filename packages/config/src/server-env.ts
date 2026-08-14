@@ -43,6 +43,23 @@ const serverEnvSchema = z
     /** Max requests per window for the credential-bearing auth routes
      * (register, login). Optional for the same reason as the window above. */
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+    /** Shared sliding window (ms) for the per-user API abuse-protection
+     * limiters below (general API, upload, download/preview). Optional,
+     * falls back to 5 minutes wherever it's read. */
+    API_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+    /** Max requests per window, per authenticated user, across every
+     * `/vaults`, `/folders`, and `/files` route (layered under the more
+     * specific upload/download budgets below — a request to an upload or
+     * download route counts against both). Optional, falls back to 300. */
+    API_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+    /** Max requests per window, per authenticated user, shared by
+     * `POST /files/upload` and `POST /files/upload-encrypted` (one budget
+     * for both — they're the same user action). Optional, falls back to 30. */
+    UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+    /** Max requests per window, per authenticated user, shared by
+     * `GET /files/:id/download` and `GET /files/:id/preview` (one budget
+     * for both). Optional, falls back to 60. */
+    DOWNLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
     /**
      * Number of reverse-proxy hops to trust when determining the real
      * client IP from `X-Forwarded-For` (Express's `trust proxy` setting).

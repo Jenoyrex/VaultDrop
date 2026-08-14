@@ -10,6 +10,7 @@ import type { StorageAdapter } from "@vaultdrop/types";
 import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { AppError } from "../utils/app-error.js";
+import type { RateLimitRequestHandler } from "express-rate-limit";
 import { FileService } from "../services/file.service.js";
 import { StreamingMulterStorageEngine } from "../storage/streaming-multer-storage-engine.js";
 import { buildVaultStorageKey } from "../storage/local-storage-adapter.js";
@@ -45,7 +46,10 @@ function contentDispositionFilename(file: { name: string | null; id: string }): 
 export function createFileRouter(
   prisma: PrismaClient,
   env: ServerEnv,
-  storage: StorageAdapter
+  storage: StorageAdapter,
+  generalApiLimiter: RateLimitRequestHandler,
+  uploadLimiter: RateLimitRequestHandler,
+  downloadLimiter: RateLimitRequestHandler
 ): Router {
   const router = Router();
 
@@ -133,6 +137,7 @@ export function createFileRouter(
   ]);
 
   router.use(requireAuth);
+  router.use(generalApiLimiter);
 
   // ✅ LIST FILES
   router.get(
@@ -158,6 +163,10 @@ export function createFileRouter(
   // ✅ UPLOAD
   router.post(
     "/upload",
+    // Rejects before validateUploadQuery/multer ever run — a 429 here
+    // never parses the multipart body, opens a storage write, or touches
+    // the filesystem/bucket at all.
+    uploadLimiter,
     validateUploadQuery,
     upload.single("file"),
     asyncHandler(async (req, res) => {
@@ -194,6 +203,10 @@ export function createFileRouter(
   // a multipart part to read it from.
   router.post(
     "/upload-encrypted",
+    // Same budget as /upload (uploadLimiter is one shared instance, not
+    // a separately-configured one) — rejects before the request body is
+    // ever piped into enforceMaxSize/storage.putStream.
+    uploadLimiter,
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
 
@@ -284,6 +297,9 @@ export function createFileRouter(
 
   router.get(
     "/:fileId/download",
+    // Rejects before fileService.getFileStream ever runs — a 429 here
+    // never opens a storage read stream.
+    downloadLimiter,
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
 
@@ -315,6 +331,8 @@ export function createFileRouter(
 
   router.get(
     "/:fileId/preview",
+    // Same budget as /download (downloadLimiter is one shared instance).
+    downloadLimiter,
     asyncHandler(async (req, res) => {
       if (!req.user) throw AppError.unauthorized();
 
