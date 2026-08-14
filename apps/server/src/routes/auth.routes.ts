@@ -6,7 +6,7 @@ import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { AppError } from "../utils/app-error.js";
 import { AuthService } from "../services/auth.service.js";
-import { loginSchema, registerSchema } from "./auth.schemas.js";
+import { changePasswordSchema, loginSchema, registerSchema } from "./auth.schemas.js";
 import { createAuthRateLimiters } from "../middleware/rate-limit.js";
 
 export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
@@ -63,6 +63,31 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
       }
       const user = await authService.getCurrentUser(req.user.sub);
       res.status(200).json({ user });
+    })
+  );
+
+  // Rate-limited like /auth/login (same Argon2-verify cost profile) and
+  // authenticated, so a valid JWT is a precondition for even attempting
+  // this — but the JWT alone is never sufficient: `currentPassword` is
+  // independently re-verified inside AuthService.changePassword before
+  // anything is written. See that method for the completeness/atomicity
+  // guarantees around `vaults`.
+  router.put(
+    "/password",
+    credentialLimiter,
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) {
+        throw AppError.unauthorized();
+      }
+      const body = changePasswordSchema.parse(req.body);
+      await authService.changePassword(
+        req.user.sub,
+        body.currentPassword,
+        body.newPassword,
+        body.vaults
+      );
+      res.status(204).send();
     })
   );
 

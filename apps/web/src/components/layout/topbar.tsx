@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { LogOut, User } from "lucide-react";
+import { KeyRound, LogOut, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/providers/auth-provider";
+import ChangePasswordDialog from "@/components/account/ChangePasswordDialog";
 
 export function Topbar() {
   const { user, logout } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
+  const [showChangePassword, setShowChangePassword] = React.useState(false);
 
   async function handleLogout(): Promise<void> {
     setIsLoggingOut(true);
@@ -28,11 +30,18 @@ export function Topbar() {
           </span>
           <span className="font-medium">{user?.username}</span>
         </div>
+        <Button variant="outline" size="sm" onClick={() => setShowChangePassword(true)}>
+          <KeyRound className="h-4 w-4" />
+          Change Password
+        </Button>
         <Button variant="outline" size="sm" isLoading={isLoggingOut} onClick={handleLogout}>
           {!isLoggingOut && <LogOut className="h-4 w-4" />}
           Logout
         </Button>
       </div>
+      {showChangePassword && (
+        <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />
+      )}
     </header>
   );
 }

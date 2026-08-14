@@ -7,7 +7,8 @@
 import type {
   RecoveryEnvelopeResponse,
   VaultDTO,
-  VaultEncryptionEnvelope
+  VaultEncryptionEnvelope,
+  VaultPasswordRewrap
 } from "@vaultdrop/types";
 import {
   deriveKek,
@@ -174,4 +175,86 @@ export async function unwrapVaultDekWithRecoveryKey(
     recoveryKey,
     DEK_USAGES
   );
+}
+
+/** Thrown by `prepareVaultRewrapsForPasswordChange` when *every* encrypted
+ * vault fails to unwrap with the given current password — the only
+ * explanation, since a correct password unwraps every non-corrupted
+ * vault identically (they all derive from the same account credential). */
+export class IncorrectPasswordError extends Error {
+  constructor() {
+    super("Current password is incorrect");
+    this.name = "IncorrectPasswordError";
+  }
+}
+
+/** Thrown when *some but not all* encrypted vaults fail to unwrap — proof
+ * the password itself is correct (it worked for the others), so the
+ * failing vault's own stored envelope is the problem, not the password. */
+export class CorruptedVaultError extends Error {
+  public readonly vaultId: string;
+  public readonly vaultName: string;
+
+  constructor(vaultId: string, vaultName: string) {
+    super(
+      `Vault "${vaultName}" could not be unwrapped with the current password — its data may be corrupted`
+    );
+    this.name = "CorruptedVaultError";
+    this.vaultId = vaultId;
+    this.vaultName = vaultName;
+  }
+}
+
+/**
+ * Prepares the payload for `PUT /auth/password`: for every encrypted
+ * vault, unwraps its DEK with `currentPassword` and re-wraps the *same*
+ * DEK with `newPassword` — file content and names are never touched,
+ * only the DEK's wrapping. `encryptedVaults` must already be filtered to
+ * vaults with an encryption envelope (see `hasEncryptionEnvelope`);
+ * legacy vaults have nothing to rewrap and must not be passed in.
+ *
+ * Fails closed, before producing or sending anything: if every vault
+ * fails to unwrap, the current password itself is wrong
+ * (`IncorrectPasswordError`). If only some fail, the password is proven
+ * correct (it worked for the others) and the failing vault's stored data
+ * is the problem (`CorruptedVaultError`, naming that vault) — in neither
+ * case is a partial result ever returned.
+ */
+export async function prepareVaultRewrapsForPasswordChange(
+  encryptedVaults: VaultDTO[],
+  currentPassword: string,
+  newPassword: string
+): Promise<VaultPasswordRewrap[]> {
+  if (encryptedVaults.length === 0) {
+    return [];
+  }
+
+  const results = await Promise.allSettled(
+    encryptedVaults.map((vault) => unwrapVaultDek(vault, currentPassword))
+  );
+
+  const paired = encryptedVaults.map((vault, index) => ({
+    vault,
+    result: results[index] as PromiseSettledResult<CryptoKey>
+  }));
+
+  const failed = paired.filter((entry) => entry.result.status === "rejected");
+
+  if (failed.length === paired.length) {
+    throw new IncorrectPasswordError();
+  }
+
+  if (failed.length > 0) {
+    const broken = failed[0]!.vault;
+    throw new CorruptedVaultError(broken.id, broken.name);
+  }
+
+  const rewraps: VaultPasswordRewrap[] = [];
+  for (const entry of paired) {
+    const dek = (entry.result as PromiseFulfilledResult<CryptoKey>).value;
+    const envelope = await rewrapVaultDekWithPassword(dek, newPassword);
+    rewraps.push({ vaultId: entry.vault.id, ...envelope });
+  }
+
+  return rewraps;
 }

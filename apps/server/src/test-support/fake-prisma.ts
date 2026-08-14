@@ -99,7 +99,16 @@ export function createFakePrisma(
   files: FakeFileRow[];
   folders: FakeFolderRow[];
   users: FakeUserRow[];
+  /**
+   * Test-only hook: makes `vault.update` throw for the given vault id on
+   * its next call (and every call after, until cleared with `null`) —
+   * used to simulate a mid-transaction DB failure and assert that
+   * `$transaction`'s rollback genuinely undoes everything applied so far
+   * in that transaction, not just the operation that failed.
+   */
+  forceVaultUpdateFailureFor: (vaultId: string | null) => void;
 } {
+  let forcedVaultUpdateFailureId: string | null = null;
   const now = new Date();
   const vaults: FakeVaultRow[] = seedVaults.map((seed) => ({
     createdAt: now,
@@ -139,11 +148,42 @@ export function createFakePrisma(
         };
         users.push(row);
         return row;
+      },
+      async update({
+        where,
+        data
+      }: {
+        where: { id: string };
+        data: Partial<Omit<FakeUserRow, "id">>;
+      }) {
+        const row = users.find((user) => user.id === where.id);
+        if (!row) {
+          throw new Error(`fake-prisma: user ${where.id} not found`);
+        }
+        Object.assign(row, data, { updatedAt: new Date() });
+        return row;
       }
     },
     vault: {
       async findUnique({ where }: { where: { id: string } }) {
         return vaults.find((vault) => vault.id === where.id) ?? null;
+      },
+      // Only the shape `AuthService.changePassword` actually calls:
+      // "every vault owned by this user that currently has an encryption
+      // envelope", selecting just `id`. Extend if a future caller needs
+      // a different filter/select shape.
+      async findMany({
+        where
+      }: {
+        where: { ownerId: string; wrappedDekCiphertext: { not: null } };
+        select?: { id: true };
+      }) {
+        return vaults
+          .filter(
+            (vault) =>
+              vault.ownerId === where.ownerId && vault.wrappedDekCiphertext !== null
+          )
+          .map((vault) => ({ id: vault.id }));
       },
       async update({
         where,
@@ -152,6 +192,9 @@ export function createFakePrisma(
         where: { id: string };
         data: Partial<Omit<FakeVaultRow, "id" | "ownerId">>;
       }) {
+        if (where.id === forcedVaultUpdateFailureId) {
+          throw new Error(`fake-prisma: simulated update failure for vault ${where.id}`);
+        }
         const row = vaults.find((vault) => vault.id === where.id);
         if (!row) {
           throw new Error(`fake-prisma: vault ${where.id} not found`);
@@ -271,8 +314,41 @@ export function createFakePrisma(
         const [row] = folders.splice(index, 1);
         return row;
       }
+    },
+    // Simulates Prisma's interactive-transaction rollback semantics: if
+    // `fn` throws, every mutation it made to any of these four in-memory
+    // collections is undone before the error propagates, so a caller can
+    // never observe a partially-applied transaction — matching what a
+    // real Postgres transaction guarantees.
+    async $transaction<T>(fn: (tx: PrismaClient) => Promise<T>): Promise<T> {
+      const usersSnapshot = users.map((row) => ({ ...row }));
+      const vaultsSnapshot = vaults.map((row) => ({ ...row }));
+      const filesSnapshot = files.map((row) => ({ ...row }));
+      const foldersSnapshot = folders.map((row) => ({ ...row }));
+      try {
+        return await fn(fake as unknown as PrismaClient);
+      } catch (error) {
+        users.length = 0;
+        users.push(...usersSnapshot);
+        vaults.length = 0;
+        vaults.push(...vaultsSnapshot);
+        files.length = 0;
+        files.push(...filesSnapshot);
+        folders.length = 0;
+        folders.push(...foldersSnapshot);
+        throw error;
+      }
     }
   };
 
-  return { prisma: fake as unknown as PrismaClient, vaults, files, folders, users };
+  return {
+    prisma: fake as unknown as PrismaClient,
+    vaults,
+    files,
+    folders,
+    users,
+    forceVaultUpdateFailureFor(vaultId: string | null) {
+      forcedVaultUpdateFailureId = vaultId;
+    }
+  };
 }

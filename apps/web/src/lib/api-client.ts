@@ -4,7 +4,8 @@ import type {
   RecoveryEnvelopeResponse,
   UserDTO,
   VaultDTO,
-  VaultEncryptionEnvelope
+  VaultEncryptionEnvelope,
+  VaultPasswordRewrap
 } from "@vaultdrop/types";
 import { prepareEncryptedUpload } from "@/lib/upload/encrypt-upload";
 
@@ -242,6 +243,28 @@ export const authApi = {
   me(token: string): Promise<{ user: UserDTO }> {
     return request<{ user: UserDTO }>("/auth/me", {
       token
+    });
+  },
+
+  /**
+   * Atomically changes the account password and re-wraps every currently
+   * encrypted vault's DEK for it. `vaults` must be prepared by
+   * `prepareVaultRewrapsForPasswordChange` — this function never derives
+   * or touches any KEK/DEK itself, it only submits the already-computed
+   * ciphertext envelopes alongside the two passwords (sent for
+   * server-side verification/hashing only, the same trust boundary as
+   * `login`/`register`).
+   */
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+    vaults: VaultPasswordRewrap[],
+    token: string
+  ): Promise<void> {
+    return request<void>("/auth/password", {
+      method: "PUT",
+      token,
+      body: JSON.stringify({ currentPassword, newPassword, vaults })
     });
   }
 };
