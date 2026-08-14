@@ -42,6 +42,31 @@ export interface CreateVaultRequest {
   encryption?: VaultEncryptionEnvelope;
 }
 
+/**
+ * The vault's recovery-wrapped DEK ciphertext. Returned only from the
+ * dedicated `GET /vaults/:id/recovery-key` endpoint — deliberately never
+ * included in `VaultDTO` or any general vault response (see
+ * `VaultDTO.hasRecoveryKey` for the safe yes/no signal used everywhere
+ * else). Opaque to the server; only decryptable client-side with the
+ * user's recovery key.
+ */
+export interface RecoveryEnvelopeResponse {
+  recoveryWrappedDekCiphertext: string;
+  recoveryWrappedDekIv: string;
+}
+
+/**
+ * Body for enrolling or rotating a vault's recovery envelope
+ * (`PUT /vaults/:id/recovery-key`). Generated entirely client-side by
+ * wrapping the vault DEK with a freshly generated recovery key — the
+ * server only ever receives this opaque ciphertext/IV pair, never the
+ * recovery key or the DEK itself. Submitting this again for a vault that
+ * already has one overwrites and permanently invalidates the previous
+ * recovery envelope: only the recovery key that produced the newest
+ * ciphertext can ever unwrap it.
+ */
+export type EnrollRecoveryKeyRequest = RecoveryEnvelopeResponse;
+
 /* --------------------------------- Folder --------------------------------- */
 
 export interface CreateFolderRequest {

@@ -38,6 +38,14 @@ export interface VaultDTO {
   wrappedDekCiphertext: string | null;
   /** Base64-encoded 12-byte IV used for the KEK-wrap above. */
   wrappedDekIv: string | null;
+  /**
+   * Whether a recovery envelope currently exists for this vault. Safe to
+   * expose on the general vault DTO (unlike the recovery ciphertext
+   * itself) since it reveals nothing beyond a yes/no fact, and lets the
+   * UI decide whether to offer "recover with key" vs "set up a recovery
+   * key" without ever fetching the wrapped material itself.
+   */
+  hasRecoveryKey: boolean;
 }
 
 export interface FolderDTO {

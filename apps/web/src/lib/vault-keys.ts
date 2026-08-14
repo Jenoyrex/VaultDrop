@@ -4,12 +4,28 @@
  * client-side: the password, the derived KEK, and the unwrapped DEK never
  * leave the browser and are never sent to the server.
  */
-import type { VaultDTO, VaultEncryptionEnvelope } from "@vaultdrop/types";
-import { deriveKek, wrapKey, unwrapKey, generateAesKey } from "@/lib/crypto";
+import type {
+  RecoveryEnvelopeResponse,
+  VaultDTO,
+  VaultEncryptionEnvelope
+} from "@vaultdrop/types";
+import {
+  deriveKek,
+  wrapKey,
+  unwrapKey,
+  generateAesKey,
+  generateRecoveryKey,
+  parseRecoveryKey,
+  importAesKeyRaw
+} from "@/lib/crypto";
 
 /** DEK key usages needed to later wrap/unwrap per-file keys and, in a
  * future checkpoint, encrypt/decrypt file content directly. */
 const DEK_USAGES: KeyUsage[] = ["encrypt", "decrypt", "wrapKey", "unwrapKey"];
+
+/** A recovery key is only ever used to wrap/unwrap the DEK, never to
+ * encrypt/decrypt anything directly. */
+const RECOVERY_KEY_USAGES: KeyUsage[] = ["wrapKey", "unwrapKey"];
 
 /** Current zero-knowledge envelope version this client writes. */
 export const CURRENT_ENCRYPTION_VERSION = 1;
@@ -72,6 +88,31 @@ export async function unwrapVaultDek(
 }
 
 /**
+ * Derives a fresh KEK from `password` (random salt) and wraps `dek` with
+ * it. Shared by `createVaultEnvelope` (brand-new DEK) and the post-recovery
+ * "restore password unlock" flow (an already-recovered DEK) — both cases
+ * produce the same envelope shape for `PUT/POST .../encryption`. Callers
+ * are responsible for `password` actually being the user's current
+ * account password; this function has no way to check that itself.
+ */
+export async function rewrapVaultDekWithPassword(
+  dek: CryptoKey,
+  password: string
+): Promise<VaultEncryptionEnvelope> {
+  const { key: kek, params } = await deriveKek(password);
+  const wrapped = await wrapKey(dek, kek);
+
+  return {
+    encryptionVersion: CURRENT_ENCRYPTION_VERSION,
+    kekSalt: params.salt,
+    kekIterations: params.iterations,
+    kekHash: params.hash,
+    wrappedDekCiphertext: wrapped.ciphertext,
+    wrappedDekIv: wrapped.iv
+  };
+}
+
+/**
  * Generates a brand-new DEK for a to-be-created vault, derives a fresh
  * KEK from the account password (random salt), and wraps the DEK with
  * it. The returned `envelope` is what gets sent to `POST /vaults` — the
@@ -82,18 +123,55 @@ export async function createVaultEnvelope(
   password: string
 ): Promise<{ dek: CryptoKey; envelope: VaultEncryptionEnvelope }> {
   const dek = await generateAesKey();
-  const { key: kek, params } = await deriveKek(password);
-  const wrapped = await wrapKey(dek, kek);
+  const envelope = await rewrapVaultDekWithPassword(dek, password);
+  return { dek, envelope };
+}
+
+/**
+ * Generates a brand-new recovery key and wraps `dek` with it directly
+ * (no KDF — the recovery key already has full 256-bit entropy, so
+ * deriving further from it would add nothing). Returns the formatted key
+ * to show the user exactly once, plus the ciphertext envelope to send to
+ * `PUT /vaults/:id/recovery-key`. The recovery key itself is never
+ * returned to a caller that could persist it — it exists only as this
+ * function's local, transient state.
+ */
+export async function createRecoveryEnvelope(
+  dek: CryptoKey
+): Promise<{ recoveryKey: string; envelope: RecoveryEnvelopeResponse }> {
+  const { bytes, formatted } = generateRecoveryKey();
+  const recoveryKey = await importAesKeyRaw(bytes, RECOVERY_KEY_USAGES);
+  const wrapped = await wrapKey(dek, recoveryKey);
 
   return {
-    dek,
+    recoveryKey: formatted,
     envelope: {
-      encryptionVersion: CURRENT_ENCRYPTION_VERSION,
-      kekSalt: params.salt,
-      kekIterations: params.iterations,
-      kekHash: params.hash,
-      wrappedDekCiphertext: wrapped.ciphertext,
-      wrappedDekIv: wrapped.iv
+      recoveryWrappedDekCiphertext: wrapped.ciphertext,
+      recoveryWrappedDekIv: wrapped.iv
     }
   };
+}
+
+/**
+ * Unwraps a vault's DEK using a user-supplied recovery key string against
+ * the vault's stored recovery envelope. Rejects (throws) if the recovery
+ * key is malformed, wrong, or the envelope has been tampered with — same
+ * indistinguishable failure mode as a wrong password in `unwrapVaultDek`.
+ * Never involves the account password.
+ */
+export async function unwrapVaultDekWithRecoveryKey(
+  envelope: RecoveryEnvelopeResponse,
+  recoveryKeyInput: string
+): Promise<CryptoKey> {
+  const bytes = parseRecoveryKey(recoveryKeyInput);
+  const recoveryKey = await importAesKeyRaw(bytes, RECOVERY_KEY_USAGES);
+
+  return unwrapKey(
+    {
+      ciphertext: envelope.recoveryWrappedDekCiphertext,
+      iv: envelope.recoveryWrappedDekIv
+    },
+    recoveryKey,
+    DEK_USAGES
+  );
 }

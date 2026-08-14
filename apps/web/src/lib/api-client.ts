@@ -1,6 +1,7 @@
 import { loadWebEnv } from "@vaultdrop/config";
 import type {
   AuthResponse,
+  RecoveryEnvelopeResponse,
   UserDTO,
   VaultDTO,
   VaultEncryptionEnvelope
@@ -287,6 +288,60 @@ export const vaultApi = {
     return request<void>(`/vaults/${vaultId}`, {
       method: "DELETE",
       token
+    });
+  },
+
+  /**
+   * Fetches the vault's recovery-wrapped DEK ciphertext — the one
+   * request that ever returns this material, used only by the
+   * client-side "unlock with recovery key" flow to unwrap it locally.
+   * Rejects with a 404 `RECOVERY_NOT_CONFIGURED` `ApiError` if the vault
+   * has no recovery envelope yet.
+   */
+  getRecoveryEnvelope(
+    vaultId: string,
+    token: string
+  ): Promise<RecoveryEnvelopeResponse> {
+    return request<RecoveryEnvelopeResponse>(`/vaults/${vaultId}/recovery-key`, {
+      token
+    });
+  },
+
+  /**
+   * Enrolls or rotates this vault's recovery envelope. `envelope` is the
+   * client-generated ciphertext/IV pair from `createRecoveryEnvelope` —
+   * never the recovery key or the DEK itself. Overwrites any previous
+   * recovery envelope outright, which is what invalidates the previous
+   * recovery key.
+   */
+  enrollRecoveryKey(
+    vaultId: string,
+    envelope: RecoveryEnvelopeResponse,
+    token: string
+  ): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/recovery-key`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(envelope)
+    });
+  },
+
+  /**
+   * Re-wraps the vault's DEK under a fresh password-derived KEK — used
+   * after a recovery-key unlock to restore normal password unlock.
+   * Callers must have already proven `envelope` was derived from the
+   * user's real, current account password (via a real `authApi.login`
+   * call) before calling this; the server cannot verify that itself.
+   */
+  rewrapEncryption(
+    vaultId: string,
+    envelope: VaultEncryptionEnvelope,
+    token: string
+  ): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/encryption`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(envelope)
     });
   }
 };

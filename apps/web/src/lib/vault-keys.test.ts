@@ -20,6 +20,7 @@ function baseVault(overrides: Partial<VaultDTO> = {}): VaultDTO {
     kekHash: null,
     wrappedDekCiphertext: null,
     wrappedDekIv: null,
+    hasRecoveryKey: false,
     ...overrides
   };
 }

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { ApiError, vaultApi } from "@/lib/api-client";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
-import { createVaultEnvelope } from "@/lib/vault-keys";
+import { createVaultEnvelope, createRecoveryEnvelope } from "@/lib/vault-keys";
+import RecoveryKeyDialog from "./RecoveryKeyDialog";
 
 interface CreateVaultDialogProps {
   onClose: () => void;
@@ -22,6 +23,7 @@ export default function CreateVaultDialog({
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
 
   async function handleCreate() {
     if (!accessToken) {
@@ -58,8 +60,19 @@ export default function CreateVaultDialog({
       // unlocked rather than forcing an immediate re-prompt.
       setVaultKey(vault.id, dek);
 
-      onCreated();
-      onClose();
+      // Best-effort: the vault is already fully created and usable via
+      // password even if recovery enrollment fails here, so a failure at
+      // this step is surfaced but must not roll back or block vault
+      // creation — the user can set up a recovery key later from the
+      // vault page.
+      try {
+        const { recoveryKey: key, envelope } = await createRecoveryEnvelope(dek);
+        await vaultApi.enrollRecoveryKey(vault.id, envelope, accessToken);
+        setRecoveryKey(key);
+      } catch {
+        onCreated();
+        onClose();
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
@@ -69,6 +82,18 @@ export default function CreateVaultDialog({
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleRecoveryKeySaved() {
+    setRecoveryKey(null);
+    onCreated();
+    onClose();
+  }
+
+  if (recoveryKey) {
+    return (
+      <RecoveryKeyDialog recoveryKey={recoveryKey} onDone={handleRecoveryKeySaved} />
+    );
   }
 
   return (

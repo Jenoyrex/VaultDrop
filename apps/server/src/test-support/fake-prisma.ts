@@ -14,7 +14,24 @@ export interface FakeVaultRow {
   id: string;
   ownerId: string;
   name: string;
+  createdAt: Date;
+  updatedAt: Date;
+  encryptionVersion: number | null;
+  kekSalt: string | null;
+  kekIterations: number | null;
+  kekHash: string | null;
+  wrappedDekCiphertext: string | null;
+  wrappedDekIv: string | null;
+  recoveryWrappedDekCiphertext: string | null;
+  recoveryWrappedDekIv: string | null;
 }
+
+/** Only `id`/`ownerId`/`name` are required to seed a vault in a test —
+ * every other column defaults the same way a fresh, unencrypted, legacy
+ * vault row would (nulls, "now" timestamps), so existing callers that
+ * only care about ownership checks don't need to change. */
+export type SeedVaultRow = Pick<FakeVaultRow, "id" | "ownerId" | "name"> &
+  Partial<Omit<FakeVaultRow, "id" | "ownerId" | "name">>;
 
 export interface FakeFileRow {
   id: string;
@@ -63,12 +80,26 @@ interface FindManyWhere {
   parentId?: string | null;
 }
 
-export function createFakePrisma(seedVaults: FakeVaultRow[]): {
+export function createFakePrisma(seedVaults: SeedVaultRow[]): {
   prisma: PrismaClient;
+  vaults: FakeVaultRow[];
   files: FakeFileRow[];
   folders: FakeFolderRow[];
 } {
-  const vaults = [...seedVaults];
+  const now = new Date();
+  const vaults: FakeVaultRow[] = seedVaults.map((seed) => ({
+    createdAt: now,
+    updatedAt: now,
+    encryptionVersion: null,
+    kekSalt: null,
+    kekIterations: null,
+    kekHash: null,
+    wrappedDekCiphertext: null,
+    wrappedDekIv: null,
+    recoveryWrappedDekCiphertext: null,
+    recoveryWrappedDekIv: null,
+    ...seed
+  }));
   const files: FakeFileRow[] = [];
   const folders: FakeFolderRow[] = [];
 
@@ -76,6 +107,20 @@ export function createFakePrisma(seedVaults: FakeVaultRow[]): {
     vault: {
       async findUnique({ where }: { where: { id: string } }) {
         return vaults.find((vault) => vault.id === where.id) ?? null;
+      },
+      async update({
+        where,
+        data
+      }: {
+        where: { id: string };
+        data: Partial<Omit<FakeVaultRow, "id" | "ownerId">>;
+      }) {
+        const row = vaults.find((vault) => vault.id === where.id);
+        if (!row) {
+          throw new Error(`fake-prisma: vault ${where.id} not found`);
+        }
+        Object.assign(row, data, { updatedAt: new Date() });
+        return row;
       }
     },
     file: {
@@ -192,5 +237,5 @@ export function createFakePrisma(seedVaults: FakeVaultRow[]): {
     }
   };
 
-  return { prisma: fake as unknown as PrismaClient, files, folders };
+  return { prisma: fake as unknown as PrismaClient, vaults, files, folders };
 }

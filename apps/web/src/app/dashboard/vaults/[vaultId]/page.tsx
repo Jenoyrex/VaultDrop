@@ -11,6 +11,7 @@ import {
   Upload,
   Loader2,
   FolderPlus,
+  KeyRound,
   Vault as VaultIcon,
   Search,
   X
@@ -19,7 +20,7 @@ import {
 import type { VaultDTO } from "@vaultdrop/types";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
-import { hasEncryptionEnvelope } from "@/lib/vault-keys";
+import { hasEncryptionEnvelope, createRecoveryEnvelope } from "@/lib/vault-keys";
 import { encryptText } from "@/lib/crypto";
 import {
   buildDecryptedSearchIndex,
@@ -40,6 +41,7 @@ import FolderCard from "@/components/folder/FolderCard";
 import FolderGrid from "@/components/folder/FolderGrid";
 import CreateFolderDialog from "@/components/folder/CreateFolderDialog";
 import UnlockVaultGate from "@/components/vault/UnlockVaultGate";
+import RecoveryKeyDialog from "@/components/vault/RecoveryKeyDialog";
 
 interface BreadcrumbEntry {
   id: string | null;
@@ -70,6 +72,9 @@ export default function VaultPage() {
   const [uploading, setUploading] = useState(false);
 
   const [showFolderDialog, setShowFolderDialog] = useState(false);
+
+  const [pendingRecoveryKey, setPendingRecoveryKey] = useState<string | null>(null);
+  const [settingUpRecovery, setSettingUpRecovery] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<DecryptedSearchIndex | null>(
@@ -376,6 +381,27 @@ export default function VaultPage() {
     await loadContents(currentFolderId);
   }
 
+  async function handleSetUpRecoveryKey() {
+    if (!accessToken || !vaultDek) return;
+
+    try {
+      setSettingUpRecovery(true);
+      const { recoveryKey, envelope } = await createRecoveryEnvelope(vaultDek);
+      await vaultApi.enrollRecoveryKey(vaultId, envelope, accessToken);
+      setPendingRecoveryKey(recoveryKey);
+    } catch (err) {
+      console.error(err);
+      alert("Couldn't set up a recovery key. Please try again.");
+    } finally {
+      setSettingUpRecovery(false);
+    }
+  }
+
+  function handleRecoveryKeyDialogDone() {
+    setPendingRecoveryKey(null);
+    loadVault();
+  }
+
   function formatPathLabels(pathLabels: string[]): string {
     return ["Vault", ...pathLabels].join(" / ");
   }
@@ -437,6 +463,23 @@ export default function VaultPage() {
 
           {!needsUnlock && !vaultLoading && (
             <div className="flex gap-3">
+
+              {encryptedVault && (
+                <button
+                  onClick={handleSetUpRecoveryKey}
+                  disabled={settingUpRecovery || !vaultDek}
+                  className="flex items-center gap-2 rounded-lg border px-5 py-3 disabled:opacity-50"
+                >
+                  {settingUpRecovery ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-5 w-5" />
+                  )}
+                  {vault?.hasRecoveryKey
+                    ? "Regenerate Recovery Key"
+                    : "Set Up Recovery Key"}
+                </button>
+              )}
 
               <button
                 onClick={() => setShowFolderDialog(true)}
@@ -709,6 +752,13 @@ export default function VaultPage() {
         }
         onCreate={createFolder}
       />
+
+      {pendingRecoveryKey && (
+        <RecoveryKeyDialog
+          recoveryKey={pendingRecoveryKey}
+          onDone={handleRecoveryKeyDialogDone}
+        />
+      )}
     </>
   );
 }

@@ -15,3 +15,4 @@ export * from "./kdf.js";
 export * from "./key-wrap.js";
 export * from "./chunked-cipher.js";
 export * from "./text-cipher.js";
+export * from "./recovery-key.js";

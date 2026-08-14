@@ -30,6 +30,17 @@ export function createVaultRouter(prisma: PrismaClient, env: ServerEnv): Router 
     encryption: encryptionEnvelopeSchema.optional()
   });
 
+  // Same opaque-blob trust model as `encryptionEnvelopeSchema` above: the
+  // server only ever validates shape, never derives or interprets this
+  // ciphertext/IV pair. Recovery enrollment happens as a separate request
+  // from vault creation (see vault-recovery.test.ts) so it can also be
+  // used to retrofit recovery onto an already-encrypted vault, or to
+  // rotate an existing recovery key.
+  const recoveryEnvelopeSchema = z.object({
+    recoveryWrappedDekCiphertext: z.string().min(1),
+    recoveryWrappedDekIv: z.string().min(1)
+  });
+
   router.use(requireAuth);
 
   router.post(
@@ -66,6 +77,60 @@ export function createVaultRouter(prisma: PrismaClient, env: ServerEnv): Router 
       if (!req.user) throw AppError.unauthorized();
       await vaultService.deleteVault(req.params["vaultId"] as string, req.user.sub);
       res.status(204).send();
+    })
+  );
+
+  // Enroll or rotate this vault's recovery envelope. Body is an opaque
+  // ciphertext/IV pair the browser already produced by wrapping the vault
+  // DEK with a freshly generated recovery key — never the recovery key or
+  // the DEK itself. Overwrites any existing recovery envelope outright.
+  router.put(
+    "/:vaultId/recovery-key",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+      const body = recoveryEnvelopeSchema.parse(req.body);
+      const vault = await vaultService.enrollRecoveryKey(
+        req.params["vaultId"] as string,
+        req.user.sub,
+        body
+      );
+      res.status(200).json({ vault });
+    })
+  );
+
+  // The only route that ever returns recovery-wrapped material — used
+  // exclusively by the client-side recovery flow to fetch the ciphertext
+  // it then unwraps locally with the user's recovery key. Deliberately
+  // separate from GET /:vaultId, which never includes these fields.
+  router.get(
+    "/:vaultId/recovery-key",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+      const envelope = await vaultService.getRecoveryEnvelope(
+        req.params["vaultId"] as string,
+        req.user.sub
+      );
+      res.status(200).json(envelope);
+    })
+  );
+
+  // Re-wraps the vault's DEK under a fresh password-derived KEK, used
+  // after a recovery-key unlock to restore normal password unlock. The
+  // client is expected to have already proven `envelope` was derived from
+  // the caller's real, current account password (via a real
+  // POST /auth/login call) before ever calling this — the server has no
+  // way to verify that itself, since it never sees passwords.
+  router.put(
+    "/:vaultId/encryption",
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw AppError.unauthorized();
+      const body = encryptionEnvelopeSchema.parse(req.body);
+      const vault = await vaultService.rewrapEncryption(
+        req.params["vaultId"] as string,
+        req.user.sub,
+        body
+      );
+      res.status(200).json({ vault });
     })
   );
 
