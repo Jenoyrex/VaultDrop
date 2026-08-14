@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import type { PrismaClient } from "@prisma/client";
 import type { ServerEnv } from "@vaultdrop/config";
 import type { StorageAdapter } from "@vaultdrop/types";
@@ -8,10 +9,15 @@ import { createVaultRouter } from "./routes/vault.routes.js";
 import { createFolderRouter } from "./routes/folder.routes.js";
 import { createFileRouter } from "./routes/file.routes.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { requestLogger } from "./middleware/request-logger.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
 
+  // Mounted first so the access log's duration covers the full request,
+  // including body parsing and everything downstream.
+  app.use(requestLogger);
+  app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: "2mb" }));
 

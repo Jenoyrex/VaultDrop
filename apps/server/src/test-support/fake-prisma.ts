@@ -51,6 +51,16 @@ export interface FakeFileRow {
   nameIv: string | null;
 }
 
+export interface FakeUserRow {
+  id: string;
+  username: string;
+  passwordHash: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type CreateUserData = Omit<FakeUserRow, "id" | "createdAt" | "updatedAt">;
+
 export interface FakeFolderRow {
   id: string;
   name: string | null;
@@ -80,11 +90,15 @@ interface FindManyWhere {
   parentId?: string | null;
 }
 
-export function createFakePrisma(seedVaults: SeedVaultRow[]): {
+export function createFakePrisma(
+  seedVaults: SeedVaultRow[] = [],
+  seedUsers: FakeUserRow[] = []
+): {
   prisma: PrismaClient;
   vaults: FakeVaultRow[];
   files: FakeFileRow[];
   folders: FakeFolderRow[];
+  users: FakeUserRow[];
 } {
   const now = new Date();
   const vaults: FakeVaultRow[] = seedVaults.map((seed) => ({
@@ -102,8 +116,31 @@ export function createFakePrisma(seedVaults: SeedVaultRow[]): {
   }));
   const files: FakeFileRow[] = [];
   const folders: FakeFolderRow[] = [];
+  const users: FakeUserRow[] = [...seedUsers];
 
   const fake = {
+    user: {
+      async findUnique({ where }: { where: { id?: string; username?: string } }) {
+        if (where.id !== undefined) {
+          return users.find((user) => user.id === where.id) ?? null;
+        }
+        if (where.username !== undefined) {
+          return users.find((user) => user.username === where.username) ?? null;
+        }
+        return null;
+      },
+      async create({ data }: { data: CreateUserData }) {
+        const nowCreated = new Date();
+        const row: FakeUserRow = {
+          id: randomUUID(),
+          createdAt: nowCreated,
+          updatedAt: nowCreated,
+          ...data
+        };
+        users.push(row);
+        return row;
+      }
+    },
     vault: {
       async findUnique({ where }: { where: { id: string } }) {
         return vaults.find((vault) => vault.id === where.id) ?? null;
@@ -237,5 +274,5 @@ export function createFakePrisma(seedVaults: SeedVaultRow[]): {
     }
   };
 
-  return { prisma: fake as unknown as PrismaClient, vaults, files, folders };
+  return { prisma: fake as unknown as PrismaClient, vaults, files, folders, users };
 }

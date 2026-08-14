@@ -13,7 +13,14 @@ const serverEnvSchema = z.object({
   STORAGE_DRIVER: z.enum(["local", "cloud"]).default("local"),
   STORAGE_ROOT: z.string().default("./storage"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
-  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024)
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
+  /** Sliding window for auth-route rate limiting, in ms. Optional — the
+   * rate limiter falls back to its own built-in default when unset, so
+   * existing deployments/tests that don't set this keep working unchanged. */
+  AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+  /** Max requests per window for the credential-bearing auth routes
+   * (register, login). Optional for the same reason as the window above. */
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional()
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
