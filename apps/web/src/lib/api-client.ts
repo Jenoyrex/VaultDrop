@@ -33,6 +33,28 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Fired whenever `request()` sees a `401 INVALID_TOKEN` response — the
+ * server's signal that the bearer token itself is missing, malformed, or
+ * expired, as opposed to an ordinary wrong-credential 401 (a bad login
+ * password, or a wrong current password during account password change,
+ * both of which keep the generic `UNAUTHORIZED` code and never fire this).
+ * `AuthProvider` subscribes to this to drive a single, consistent
+ * session-expired flow instead of each call site handling it separately.
+ * Listeners run synchronously; `request()` still throws its `ApiError` as
+ * before regardless, so every existing per-call `catch` keeps working
+ * unchanged.
+ */
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
 interface ApiErrorBody {
   error: {
     code: string;
@@ -124,11 +146,17 @@ async function request<T>(
   if (!response.ok) {
     const body = data as ApiErrorBody | null;
 
-    throw new ApiError(
+    const apiError = new ApiError(
       response.status,
       body?.error?.code ?? "UNKNOWN_ERROR",
       body?.error?.message ?? "Something went wrong."
     );
+
+    if (apiError.status === 401 && apiError.code === "INVALID_TOKEN") {
+      sessionExpiredListeners.forEach((listener) => listener());
+    }
+
+    throw apiError;
   }
 
   return data as T;

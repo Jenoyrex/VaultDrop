@@ -19,6 +19,19 @@ export class AppError extends Error {
     return new AppError(401, "UNAUTHORIZED", message);
   }
 
+  /**
+   * Specifically for "your bearer token itself is missing, malformed, or
+   * expired" — distinct from `unauthorized()`, which also covers ordinary
+   * wrong-credential responses (e.g. a bad login password, or a wrong
+   * current password during account password change). The client uses
+   * this distinct code to trigger a global session-expired flow; it must
+   * only ever come from token verification itself, never from a
+   * route-level credential check.
+   */
+  static invalidToken(message = "Invalid or missing access token"): AppError {
+    return new AppError(401, "INVALID_TOKEN", message);
+  }
+
   static forbidden(message = "Forbidden"): AppError {
     return new AppError(403, "FORBIDDEN", message);
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { generateAesKey } from "@/lib/crypto";
-import { fileApi } from "./api-client.js";
+import { authApi, fileApi, onSessionExpired } from "./api-client.js";
 
 describe("fileApi.uploadEncrypted", () => {
   const originalFetch = global.fetch;
@@ -76,5 +76,84 @@ describe("fileApi.uploadEncrypted", () => {
     await expect(
       fileApi.uploadEncrypted("vault-1", file, vaultDek, "token")
     ).rejects.toThrow("Upload failed");
+  });
+});
+
+function mockErrorResponse(status: number, code: string, message = "error") {
+  global.fetch = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ error: { code, message } }), {
+        status,
+        headers: { "Content-Type": "application/json" }
+      })
+  ) as unknown as typeof fetch;
+}
+
+describe("onSessionExpired", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("fires every registered listener when a request gets a 401 INVALID_TOKEN response", async () => {
+    mockErrorResponse(401, "INVALID_TOKEN", "Invalid or missing access token");
+
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    await expect(authApi.me("stale-token")).rejects.toThrow();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("does not fire for a 401 with a different code (e.g. a wrong-password UNAUTHORIZED)", async () => {
+    mockErrorResponse(401, "UNAUTHORIZED", "Invalid username or password");
+
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    await expect(authApi.login("someone", "wrong-password")).rejects.toThrow();
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("does not fire for a non-401 error", async () => {
+    mockErrorResponse(500, "INTERNAL_ERROR");
+
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    await expect(authApi.me("some-token")).rejects.toThrow();
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("stops notifying a listener after it unsubscribes", async () => {
+    mockErrorResponse(401, "INVALID_TOKEN");
+
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+    unsubscribe();
+
+    await expect(authApi.me("stale-token")).rejects.toThrow();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("still throws the ApiError for the caller even while notifying listeners", async () => {
+    mockErrorResponse(401, "INVALID_TOKEN", "Invalid or missing access token");
+
+    const unsubscribe = onSessionExpired(() => undefined);
+
+    await expect(authApi.me("stale-token")).rejects.toMatchObject({
+      status: 401,
+      code: "INVALID_TOKEN"
+    });
+
+    unsubscribe();
   });
 });

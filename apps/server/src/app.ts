@@ -14,6 +14,13 @@ import { requestLogger } from "./middleware/request-logger.js";
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
 
+  // Explicit, numeric hop count — never the blanket `true` value, which
+  // would trust X-Forwarded-For from any client and which express-rate-limit
+  // itself refuses to key on for exactly that reason. Defaults to 0 (no
+  // proxy trusted), reproducing today's exact direct-connection behavior
+  // unless an operator explicitly configures it for their real topology.
+  app.set("trust proxy", env.TRUST_PROXY_HOPS ?? 0);
+
   // Mounted first so the access log's duration covers the full request,
   // including body parsing and everything downstream.
   app.use(requestLogger);

@@ -92,6 +92,9 @@ describe("PUT /auth/password", () => {
       .send({ currentPassword: CURRENT_PASSWORD, newPassword: NEW_PASSWORD, vaults: [] });
 
     expect(res.status).toBe(401);
+    // Missing bearer token -> INVALID_TOKEN, the signal that triggers a
+    // global client-side session-expired flow.
+    expect(res.body.error.code).toBe("INVALID_TOKEN");
   });
 
   it("succeeds when every encrypted vault is included: passwordHash and every vault's envelope update together", async () => {
@@ -148,6 +151,11 @@ describe("PUT /auth/password", () => {
       });
 
     expect(res.status).toBe(401);
+    // A valid bearer token was supplied — this is a credential-check
+    // failure (wrong current password), not an invalid-token condition,
+    // so it must keep the generic code and never trigger a global
+    // session-expiry on the client.
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
     expect(users[0]?.passwordHash).toBe(passwordHashBefore);
     expect(vaults.find((v) => v.id === v1.id)?.wrappedDekCiphertext).toBe(
       "old-wrapped-dek-ciphertext-1"

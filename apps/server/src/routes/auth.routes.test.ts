@@ -117,6 +117,10 @@ describe("POST /auth/login", () => {
 
     expect(res.status).toBe(401);
     expect(res.body.error.message).toBe("Invalid username or password");
+    // Never INVALID_TOKEN: a wrong password is a credential-check
+    // failure, not a "your session/token is invalid" signal — the client
+    // must not treat this as a reason to force a global session-expiry.
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
   });
 
   it("rejects a nonexistent username with the same generic 401 message", async () => {
@@ -150,18 +154,22 @@ describe("GET /auth/me", () => {
     expect(res.body.user.username).toBe(username);
   });
 
-  it("rejects a missing token with 401", async () => {
+  it("rejects a missing token with 401 INVALID_TOKEN", async () => {
     const app = makeApp();
     const res = await request(app).get("/auth/me");
     expect(res.status).toBe(401);
+    // Distinct from a wrong-password UNAUTHORIZED — this is the signal
+    // the client uses to trigger a global session-expired flow.
+    expect(res.body.error.code).toBe("INVALID_TOKEN");
   });
 
-  it("rejects a malformed token with 401", async () => {
+  it("rejects a malformed token with 401 INVALID_TOKEN", async () => {
     const app = makeApp();
     const res = await request(app)
       .get("/auth/me")
       .set("Authorization", "Bearer not-a-real-token");
     expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe("INVALID_TOKEN");
   });
 });
 
