@@ -2,6 +2,7 @@ import type { File as PrismaFile, PrismaClient } from "@prisma/client";
 import type { StorageAdapter } from "@vaultdrop/types";
 import type { FileDTO } from "@vaultdrop/types";
 import { AppError } from "../utils/app-error.js";
+import { isUniqueConstraintError } from "../utils/prisma-errors.js";
 import { VaultService } from "./vault.service.js";
 import { FolderService } from "./folder.service.js";
 
@@ -139,39 +140,60 @@ export class FileService {
    * update, since everything needed is already known by this point.
    */
   async finalizeUpload(input: FinalizeUploadInput): Promise<FileDTO> {
-    const file = await this.prisma.file.create({
-      data: input.encrypted
-        ? {
-            name: null,
-            mimeType: input.mimeType,
-            sizeBytes: input.sizeBytes,
-            vaultId: input.vaultId,
-            folderId: input.folderId,
-            storageProvider: this.storageDriverLabel,
-            storageKey: input.storageKey,
-            encrypted: true,
-            wrappedKeyCiphertext: input.wrappedKeyCiphertext,
-            wrappedKeyIv: input.wrappedKeyIv,
-            encryptedName: input.encryptedName,
-            nameIv: input.nameIv
-          }
-        : {
-            name: input.originalName,
-            mimeType: input.mimeType,
-            sizeBytes: input.sizeBytes,
-            vaultId: input.vaultId,
-            folderId: input.folderId,
-            storageProvider: this.storageDriverLabel,
-            storageKey: input.storageKey,
-            encrypted: false,
-            wrappedKeyCiphertext: null,
-            wrappedKeyIv: null,
-            encryptedName: null,
-            nameIv: null
-          }
-    });
+    try {
+      const file = await this.prisma.file.create({
+        data: input.encrypted
+          ? {
+              name: null,
+              mimeType: input.mimeType,
+              sizeBytes: input.sizeBytes,
+              vaultId: input.vaultId,
+              folderId: input.folderId,
+              storageProvider: this.storageDriverLabel,
+              storageKey: input.storageKey,
+              encrypted: true,
+              wrappedKeyCiphertext: input.wrappedKeyCiphertext,
+              wrappedKeyIv: input.wrappedKeyIv,
+              encryptedName: input.encryptedName,
+              nameIv: input.nameIv
+            }
+          : {
+              name: input.originalName,
+              mimeType: input.mimeType,
+              sizeBytes: input.sizeBytes,
+              vaultId: input.vaultId,
+              folderId: input.folderId,
+              storageProvider: this.storageDriverLabel,
+              storageKey: input.storageKey,
+              encrypted: false,
+              wrappedKeyCiphertext: null,
+              wrappedKeyIv: null,
+              encryptedName: null,
+              nameIv: null
+            }
+      });
 
-    return toFileDTO(file);
+      return toFileDTO(file);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        // Legacy (plaintext) uploads stream their bytes into storage
+        // *before* this create runs (see StreamingMulterStorageEngine /
+        // the /upload-encrypted route handler) — assertCanUpload's
+        // findFirst pre-check already rejects the common case, but two
+        // concurrent uploads can both pass it before either commits. The
+        // loser here has already written a storage object that nothing
+        // else will ever reference, so it must be cleaned up rather than
+        // left orphaned. (An encrypted upload's `name` column is always
+        // null, and Postgres treats distinct NULLs as non-colliding under
+        // a unique index, so this branch is unreachable for encrypted
+        // input in practice — cleanup is scoped to the legacy case only.)
+        if (!input.encrypted) {
+          await this.storage.delete(input.storageKey).catch(() => undefined);
+        }
+        throw AppError.conflict("A file with this name already exists here");
+      }
+      throw error;
+    }
   }
 
   async getFileOrThrow(
@@ -307,16 +329,25 @@ export class FileService {
         );
       }
 
-      const updated = await this.prisma.file.update({
-        where: {
-          id: file.id
-        },
-        data: {
-          name: input.name
-        }
-      });
+      try {
+        const updated = await this.prisma.file.update({
+          where: {
+            id: file.id
+          },
+          data: {
+            name: input.name
+          }
+        });
 
-      return toFileDTO(updated);
+        return toFileDTO(updated);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw AppError.conflict(
+            "A file with this name already exists here"
+          );
+        }
+        throw error;
+      }
     }
 
     // Encrypted rename: the server cannot compare ciphertext for

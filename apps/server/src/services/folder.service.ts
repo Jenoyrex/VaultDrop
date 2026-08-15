@@ -1,6 +1,7 @@
 import type { File as PrismaFile, Folder, PrismaClient } from "@prisma/client";
 import type { FolderContentsResponse, FolderDTO } from "@vaultdrop/types";
 import { AppError } from "../utils/app-error.js";
+import { isUniqueConstraintError } from "../utils/prisma-errors.js";
 import { VaultService } from "./vault.service.js";
 
 function toFolderDTO(folder: Folder): FolderDTO {
@@ -113,26 +114,36 @@ export class FolderService {
       }
     }
 
-    const folder = await this.prisma.folder.create({
-      data: isCiphertext
-        ? {
-            name: null,
-            vaultId: input.vaultId,
-            parentId: input.parentId ?? null,
-            encrypted: true,
-            encryptedName: input.encryptedName,
-            nameIv: input.nameIv
-          }
-        : {
-            name: input.name,
-            vaultId: input.vaultId,
-            parentId: input.parentId ?? null,
-            encrypted: false,
-            encryptedName: null,
-            nameIv: null
-          }
-    });
-    return toFolderDTO(folder);
+    try {
+      const folder = await this.prisma.folder.create({
+        data: isCiphertext
+          ? {
+              name: null,
+              vaultId: input.vaultId,
+              parentId: input.parentId ?? null,
+              encrypted: true,
+              encryptedName: input.encryptedName,
+              nameIv: input.nameIv
+            }
+          : {
+              name: input.name,
+              vaultId: input.vaultId,
+              parentId: input.parentId ?? null,
+              encrypted: false,
+              encryptedName: null,
+              nameIv: null
+            }
+      });
+      return toFolderDTO(folder);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        // The findFirst pre-check above already rejects the common case;
+        // this is the race-condition safety net for two concurrent
+        // creates that both pass it before either commits.
+        throw AppError.conflict("A folder with this name already exists here");
+      }
+      throw error;
+    }
   }
 
   async getFolderOrThrow(folderId: string, ownerId: string): Promise<Folder> {
@@ -224,16 +235,23 @@ export class FolderService {
       await this.assertParentBelongsToVault(input.parentId, folder.vaultId);
     }
 
-    const updated = await this.prisma.folder.update({
-      where: { id: folderId },
-      data: {
-        name: input.name ?? undefined,
-        encryptedName: input.encryptedName ?? undefined,
-        nameIv: input.nameIv ?? undefined,
-        parentId: input.parentId === undefined ? undefined : input.parentId
+    try {
+      const updated = await this.prisma.folder.update({
+        where: { id: folderId },
+        data: {
+          name: input.name ?? undefined,
+          encryptedName: input.encryptedName ?? undefined,
+          nameIv: input.nameIv ?? undefined,
+          parentId: input.parentId === undefined ? undefined : input.parentId
+        }
+      });
+      return toFolderDTO(updated);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw AppError.conflict("A folder with this name already exists here");
       }
-    });
-    return toFolderDTO(updated);
+      throw error;
+    }
   }
 
   async deleteFolder(folderId: string, ownerId: string): Promise<void> {

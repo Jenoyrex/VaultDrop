@@ -1,5 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
+
+/**
+ * Builds a real `Prisma.PrismaClientKnownRequestError` with code `P2002`
+ * (unique constraint violation) — the same error shape/instance type the
+ * real client throws when a `create`/`update` collides with a unique
+ * index. Used to simulate the TOCTOU race where two concurrent requests
+ * both pass a `findFirst` duplicate-name pre-check before either commits.
+ */
+function makeUniqueConstraintError(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    "Unique constraint failed on the fields",
+    { code: "P2002", clientVersion: "test" }
+  );
+}
 
 /**
  * A minimal in-memory stand-in for `PrismaClient`, covering only the
@@ -107,8 +122,26 @@ export function createFakePrisma(
    * in that transaction, not just the operation that failed.
    */
   forceVaultUpdateFailureFor: (vaultId: string | null) => void;
+  /**
+   * Test-only hook: makes the next `file.create` / `file.update` /
+   * `folder.create` / `folder.update` call throw a real
+   * `Prisma.PrismaClientKnownRequestError` (code `P2002`), then resets
+   * itself — one call, one simulated race. Used to exercise the P2002
+   * safety net *without* going through (and being caught by) the
+   * `findFirst` pre-check, i.e. the genuine TOCTOU race path rather than
+   * the ordinary friendly-conflict path.
+   */
+  forceNextUniqueViolation: (
+    target: "file.create" | "file.update" | "folder.create" | "folder.update"
+  ) => void;
 } {
   let forcedVaultUpdateFailureId: string | null = null;
+  const forcedUniqueViolations = {
+    "file.create": false,
+    "file.update": false,
+    "folder.create": false,
+    "folder.update": false
+  };
   const now = new Date();
   const vaults: FakeVaultRow[] = seedVaults.map((seed) => ({
     createdAt: now,
@@ -226,6 +259,10 @@ export function createFakePrisma(
         });
       },
       async create({ data }: { data: CreateFileData }) {
+        if (forcedUniqueViolations["file.create"]) {
+          forcedUniqueViolations["file.create"] = false;
+          throw makeUniqueConstraintError();
+        }
         const now = new Date();
         const row: FakeFileRow = {
           id: randomUUID(),
@@ -243,6 +280,10 @@ export function createFakePrisma(
         where: { id: string };
         data: Partial<CreateFileData>;
       }) {
+        if (forcedUniqueViolations["file.update"]) {
+          forcedUniqueViolations["file.update"] = false;
+          throw makeUniqueConstraintError();
+        }
         const row = files.find((file) => file.id === where.id);
         if (!row) {
           throw new Error(`fake-prisma: file ${where.id} not found`);
@@ -282,6 +323,10 @@ export function createFakePrisma(
         });
       },
       async create({ data }: { data: CreateFolderData }) {
+        if (forcedUniqueViolations["folder.create"]) {
+          forcedUniqueViolations["folder.create"] = false;
+          throw makeUniqueConstraintError();
+        }
         const now = new Date();
         const row: FakeFolderRow = {
           id: randomUUID(),
@@ -299,6 +344,10 @@ export function createFakePrisma(
         where: { id: string };
         data: Partial<CreateFolderData>;
       }) {
+        if (forcedUniqueViolations["folder.update"]) {
+          forcedUniqueViolations["folder.update"] = false;
+          throw makeUniqueConstraintError();
+        }
         const row = folders.find((folder) => folder.id === where.id);
         if (!row) {
           throw new Error(`fake-prisma: folder ${where.id} not found`);
@@ -349,6 +398,11 @@ export function createFakePrisma(
     users,
     forceVaultUpdateFailureFor(vaultId: string | null) {
       forcedVaultUpdateFailureId = vaultId;
+    },
+    forceNextUniqueViolation(
+      target: "file.create" | "file.update" | "folder.create" | "folder.update"
+    ) {
+      forcedUniqueViolations[target] = true;
     }
   };
 }
