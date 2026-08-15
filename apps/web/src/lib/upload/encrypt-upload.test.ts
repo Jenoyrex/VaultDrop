@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { generateAesKey, unwrapKey, decryptFileStreamWithEmbeddedNonce } from "@/lib/crypto";
 import { prepareEncryptedUpload } from "./encrypt-upload.js";
 
+function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    }
+  });
+}
+
 const FILE_KEY_USAGES: KeyUsage[] = ["encrypt", "decrypt", "wrapKey", "unwrapKey"];
 
 async function collectStream(
@@ -62,8 +71,14 @@ describe("prepareEncryptedUpload", () => {
       FILE_KEY_USAGES
     );
 
+    const ciphertextBytes = await collectStream(ciphertextStream);
+
     const decrypted = await collectStream(
-      decryptFileStreamWithEmbeddedNonce(ciphertextStream, fileKey)
+      decryptFileStreamWithEmbeddedNonce(
+        streamFromBytes(ciphertextBytes),
+        fileKey,
+        ciphertextBytes.length
+      )
     );
 
     expect(new TextDecoder().decode(decrypted)).toBe(plaintext);

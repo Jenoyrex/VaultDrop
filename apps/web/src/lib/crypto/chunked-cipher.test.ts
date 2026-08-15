@@ -148,7 +148,8 @@ describe("encryptFileStream / decryptFileStream round-trips", () => {
 
     const decrypted = decryptFileStreamWithEmbeddedNonce(
       streamFromBytes(encryptedBytes),
-      key
+      key,
+      encryptedBytes.length
     );
     const result = await collectStream(decrypted);
 
@@ -252,5 +253,181 @@ describe("encryptFileStream / decryptFileStream tamper and corruption detection"
         decryptFileStream(streamFromBytes(corrupted), key, baseNonce)
       )
     ).rejects.toThrow(/truncated/i);
+  });
+});
+
+describe("expectedTotalBytes: detects truncation that per-chunk auth tags miss", () => {
+  it("decrypts a valid multi-chunk ciphertext successfully when expectedTotalBytes matches", async () => {
+    const key = await generateAesKey();
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+    const plaintext = generateRandomBytes(CHUNK_SIZE * 2 + 777);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStream(streamFromBytes(plaintext), key, baseNonce)
+    );
+
+    const decrypted = await collectStream(
+      decryptFileStream(
+        streamFromBytes(encryptedBytes),
+        key,
+        baseNonce,
+        encryptedBytes.length
+      )
+    );
+
+    expect(Array.from(decrypted)).toEqual(Array.from(plaintext));
+  });
+
+  it("verifies existing single-chunk behavior still round-trips with expectedTotalBytes enforced", async () => {
+    const key = await generateAesKey();
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+    const plaintext = generateRandomBytes(123);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStream(streamFromBytes(plaintext), key, baseNonce)
+    );
+
+    const decrypted = await collectStream(
+      decryptFileStream(
+        streamFromBytes(encryptedBytes),
+        key,
+        baseNonce,
+        encryptedBytes.length
+      )
+    );
+
+    expect(Array.from(decrypted)).toEqual(Array.from(plaintext));
+  });
+
+  it("rejects a ciphertext truncated by a few bytes mid-final-chunk", async () => {
+    const key = await generateAesKey();
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+    const plaintext = generateRandomBytes(CHUNK_SIZE + 500);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStream(streamFromBytes(plaintext), key, baseNonce)
+    );
+
+    const truncated = encryptedBytes.slice(0, encryptedBytes.length - 10);
+
+    await expect(
+      collectStream(
+        decryptFileStream(
+          streamFromBytes(truncated),
+          key,
+          baseNonce,
+          encryptedBytes.length
+        )
+      )
+    ).rejects.toThrow();
+  });
+
+  it("regression: rejects a ciphertext with its entire final chunk removed, even though every remaining chunk is individually authentic (decryptFileStream)", async () => {
+    const key = await generateAesKey();
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+    // Exactly two full-size chunks, no short final chunk — every remaining
+    // frame after truncation is a complete, independently-authentic chunk.
+    const plaintext = generateRandomBytes(CHUNK_SIZE * 2);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStream(streamFromBytes(plaintext), key, baseNonce)
+    );
+
+    // Two full chunks were framed identically in size, so each occupies
+    // exactly half the wire bytes. Cut the whole second (final) frame off
+    // at that boundary — a byte-for-byte plausible "storage silently
+    // dropped the tail" truncation.
+    const oneFrameLength = encryptedBytes.length / 2;
+    const truncated = encryptedBytes.slice(0, oneFrameLength);
+
+    // Without expectedTotalBytes, this used to decrypt "successfully" to
+    // a silently-shortened plaintext — the bug this test guards against.
+    await expect(
+      collectStream(
+        decryptFileStream(streamFromBytes(truncated), key, baseNonce)
+      )
+    ).resolves.toBeDefined();
+
+    // With expectedTotalBytes supplied, the same truncated ciphertext must
+    // fail closed instead.
+    await expect(
+      collectStream(
+        decryptFileStream(
+          streamFromBytes(truncated),
+          key,
+          baseNonce,
+          encryptedBytes.length
+        )
+      )
+    ).rejects.toThrow(/truncated|tampered/i);
+  });
+
+  it("regression: rejects a ciphertext with its entire final chunk removed, through the production decryptFileStreamWithEmbeddedNonce entry point", async () => {
+    const key = await generateAesKey();
+    const plaintext = generateRandomBytes(CHUNK_SIZE * 2);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStreamWithEmbeddedNonce(streamFromBytes(plaintext), key)
+    );
+
+    // NONCE_LENGTH prefix, then two equal-size full-chunk frames.
+    const oneFrameLength = (encryptedBytes.length - NONCE_LENGTH) / 2;
+    const truncated = encryptedBytes.slice(0, NONCE_LENGTH + oneFrameLength);
+
+    await expect(
+      collectStream(
+        decryptFileStreamWithEmbeddedNonce(
+          streamFromBytes(truncated),
+          key,
+          encryptedBytes.length
+        )
+      )
+    ).rejects.toThrow(/truncated|tampered/i);
+  });
+
+  it("still rejects tampered ciphertext (auth tag failure) when expectedTotalBytes is unchanged", async () => {
+    const key = await generateAesKey();
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+    const plaintext = generateRandomBytes(1000);
+
+    const encryptedBytes = await collectStream(
+      encryptFileStream(streamFromBytes(plaintext), key, baseNonce)
+    );
+
+    const tampered = encryptedBytes.slice();
+    tampered[10] = tampered[10]! ^ 0xff;
+
+    await expect(
+      collectStream(
+        decryptFileStream(
+          streamFromBytes(tampered),
+          key,
+          baseNonce,
+          tampered.length
+        )
+      )
+    ).rejects.toThrow();
+  });
+
+  it("rejects a non-integer or negative expectedTotalBytes argument", () => {
+    const baseNonce = generateRandomBytes(NONCE_LENGTH);
+
+    expect(() =>
+      decryptFileStream(
+        streamFromBytes(new Uint8Array(0)),
+        null as unknown as CryptoKey,
+        baseNonce,
+        -1
+      )
+    ).toThrow();
+
+    expect(() =>
+      decryptFileStream(
+        streamFromBytes(new Uint8Array(0)),
+        null as unknown as CryptoKey,
+        baseNonce,
+        1.5
+      )
+    ).toThrow();
   });
 });

@@ -11,6 +11,7 @@ export interface PreviewableFile {
   encrypted: boolean;
   wrappedKeyCiphertext: string | null;
   wrappedKeyIv: string | null;
+  sizeBytes: number;
 }
 
 export function useFilePreview(
@@ -54,7 +55,8 @@ export function useFilePreview(
           ? await decryptResponseToBlob(
               response,
               await unwrapFileKey(file, vaultDek as CryptoKey),
-              file.mimeType
+              file.mimeType,
+              file.sizeBytes
             )
           : await response.blob();
 

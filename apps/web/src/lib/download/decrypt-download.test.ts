@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   generateAesKey,
+  generateRandomBytes,
   wrapKey,
+  CHUNK_SIZE,
   encryptFileStreamWithEmbeddedNonce
 } from "@/lib/crypto";
 import {
@@ -72,7 +74,8 @@ describe("unwrapFileKey", () => {
     const blob = await decryptResponseToBlob(
       new Response(new Blob([ciphertext])),
       unwrapped,
-      "text/plain"
+      "text/plain",
+      ciphertext.length
     );
     expect(await blob.text()).toBe("round trip check");
   });
@@ -111,7 +114,8 @@ describe("decryptResponseToBlob", () => {
     const blob = await decryptResponseToBlob(
       new Response(new Blob([ciphertext])),
       fileKey,
-      "text/plain"
+      "text/plain",
+      ciphertext.length
     );
 
     expect(blob.type).toBe("text/plain");
@@ -127,7 +131,8 @@ describe("decryptResponseToBlob", () => {
       decryptResponseToBlob(
         new Response(new Blob([ciphertext])),
         wrongKey,
-        "text/plain"
+        "text/plain",
+        ciphertext.length
       )
     ).rejects.toThrow(DecryptionError);
   });
@@ -145,7 +150,8 @@ describe("decryptResponseToBlob", () => {
       decryptResponseToBlob(
         new Response(new Blob([tampered])),
         fileKey,
-        "text/plain"
+        "text/plain",
+        tampered.length
       )
     ).rejects.toThrow(DecryptionError);
   });
@@ -154,7 +160,34 @@ describe("decryptResponseToBlob", () => {
     const fileKey = await generateAesKey();
 
     await expect(
-      decryptResponseToBlob(new Response(null), fileKey, "text/plain")
+      decryptResponseToBlob(new Response(null), fileKey, "text/plain", 0)
+    ).rejects.toThrow(DecryptionError);
+  });
+
+  it("rejects with DecryptionError when the ciphertext's final chunk has been entirely removed (silent truncation)", async () => {
+    const fileKey = await generateAesKey();
+    // Two full-size chunks (no short final chunk), so every remaining
+    // frame after truncation is independently authentic on its own — only
+    // a total-length check (via sizeBytes/expectedTotalBytes) catches
+    // this, not per-chunk GCM tag verification alone.
+    const plaintext = generateRandomBytes(CHUNK_SIZE * 2);
+    const ciphertext = await collectStream(
+      encryptFileStreamWithEmbeddedNonce(streamFromBytes(plaintext), fileKey)
+    );
+
+    // Two equal-size full-chunk frames follow the 12-byte embedded nonce;
+    // cut the whole second (final) frame off at that boundary.
+    const nonceLength = 12;
+    const oneFrameLength = (ciphertext.length - nonceLength) / 2;
+    const truncated = ciphertext.slice(0, nonceLength + oneFrameLength);
+
+    await expect(
+      decryptResponseToBlob(
+        new Response(new Blob([truncated])),
+        fileKey,
+        "application/octet-stream",
+        ciphertext.length
+      )
     ).rejects.toThrow(DecryptionError);
   });
 });
@@ -182,7 +215,8 @@ describe("fetchFileBlob", () => {
         mimeType: "text/plain",
         encrypted: true,
         wrappedKeyCiphertext: wrapped.ciphertext,
-        wrappedKeyIv: wrapped.iv
+        wrappedKeyIv: wrapped.iv,
+        sizeBytes: ciphertext.length
       },
       "test-token",
       vaultDek
@@ -202,7 +236,8 @@ describe("fetchFileBlob", () => {
         mimeType: "text/plain",
         encrypted: false,
         wrappedKeyCiphertext: null,
-        wrappedKeyIv: null
+        wrappedKeyIv: null,
+        sizeBytes: "plain legacy bytes".length
       },
       "test-token",
       undefined
@@ -223,7 +258,8 @@ describe("fetchFileBlob", () => {
           mimeType: "image/png",
           encrypted: true,
           wrappedKeyCiphertext: "abc",
-          wrappedKeyIv: "def"
+          wrappedKeyIv: "def",
+          sizeBytes: 3
         },
         "test-token",
         undefined
@@ -243,7 +279,8 @@ describe("fetchFileBlob", () => {
           mimeType: "text/plain",
           encrypted: false,
           wrappedKeyCiphertext: null,
-          wrappedKeyIv: null
+          wrappedKeyIv: null,
+          sizeBytes: 0
         },
         "test-token",
         undefined

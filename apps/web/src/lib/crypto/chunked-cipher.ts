@@ -134,18 +134,38 @@ export function encryptFileStream(
 /**
  * Decrypts a stream produced by `encryptFileStream`. Rejects (the stream
  * errors) if any chunk's authentication tag fails to verify — including
- * tampered ciphertext, a truncated stream, or a corrupted length prefix —
- * rather than ever producing partial or incorrect plaintext.
+ * tampered ciphertext or a corrupted length prefix — rather than ever
+ * producing partial or incorrect plaintext.
+ *
+ * Per-chunk GCM tags alone cannot detect whole trailing chunks being
+ * removed: each remaining chunk still verifies correctly on its own, so a
+ * ciphertext with its tail cut off at a frame boundary would otherwise
+ * decrypt "successfully" to a silently-shortened plaintext. When the
+ * caller knows the ciphertext's true total length in advance (from a
+ * source it trusts independently of the bytes being decrypted, e.g.
+ * server-recorded upload size), passing it as `expectedTotalBytes` closes
+ * that gap: decryption fails if the stream ends having produced a
+ * different number of bytes than expected, even though every individual
+ * chunk it did see was authentic.
  */
 export function decryptFileStream(
   ciphertext: ReadableStream<Uint8Array>,
   key: CryptoKey,
-  baseNonce: Uint8Array<ArrayBuffer>
+  baseNonce: Uint8Array<ArrayBuffer>,
+  expectedTotalBytes?: number
 ): ReadableStream<Uint8Array> {
+  if (
+    expectedTotalBytes !== undefined &&
+    (!Number.isInteger(expectedTotalBytes) || expectedTotalBytes < 0)
+  ) {
+    throw new Error("expectedTotalBytes must be a non-negative integer");
+  }
+
   const reader = ciphertext.getReader();
   let buffered: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   let chunkIndex = 0;
   let sourceExhausted = false;
+  let totalBytesRead = 0;
 
   async function fillUntil(minLength: number): Promise<void> {
     while (buffered.length < minLength && !sourceExhausted) {
@@ -156,6 +176,7 @@ export function decryptFileStream(
         break;
       }
 
+      totalBytesRead += value.length;
       buffered = concatBytes(buffered, value);
     }
   }
@@ -165,6 +186,18 @@ export function decryptFileStream(
       await fillUntil(LENGTH_PREFIX_BYTES);
 
       if (buffered.length === 0 && sourceExhausted) {
+        if (
+          expectedTotalBytes !== undefined &&
+          totalBytesRead !== expectedTotalBytes
+        ) {
+          controller.error(
+            new Error(
+              "Corrupted encrypted stream: ciphertext length does not match the expected size (truncated or tampered)"
+            )
+          );
+          return;
+        }
+
         controller.close();
         return;
       }
@@ -270,11 +303,30 @@ export function encryptFileStreamWithEmbeddedNonce(
  * Convenience wrapper around `decryptFileStream` that reads the 12-byte
  * base nonce from the front of the stream (as written by
  * `encryptFileStreamWithEmbeddedNonce`) before decrypting the rest.
+ *
+ * `expectedTotalBytes` is the ciphertext's true total length (nonce +
+ * every framed chunk), from a source the caller trusts independently of
+ * the stream being decrypted — e.g. the byte count the server recorded
+ * while the upload was originally written to storage. It is required
+ * (not optional) so that every production call site is forced to supply
+ * it, guaranteeing truncation is always caught before plaintext is
+ * returned. See `decryptFileStream` for why a per-chunk auth tag alone
+ * can't detect whole trailing chunks being removed.
  */
 export function decryptFileStreamWithEmbeddedNonce(
   ciphertext: ReadableStream<Uint8Array>,
-  key: CryptoKey
+  key: CryptoKey,
+  expectedTotalBytes: number
 ): ReadableStream<Uint8Array> {
+  if (
+    !Number.isInteger(expectedTotalBytes) ||
+    expectedTotalBytes < NONCE_LENGTH
+  ) {
+    throw new Error(
+      `expectedTotalBytes must be an integer of at least ${NONCE_LENGTH} bytes`
+    );
+  }
+
   const reader = ciphertext.getReader();
   let buffered: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   let sourceExhausted = false;
@@ -330,7 +382,12 @@ export function decryptFileStreamWithEmbeddedNonce(
           }
         });
 
-        inner = decryptFileStream(rest, key, baseNonce);
+        inner = decryptFileStream(
+          rest,
+          key,
+          baseNonce,
+          expectedTotalBytes - NONCE_LENGTH
+        );
         innerReader = inner.getReader();
       }
 

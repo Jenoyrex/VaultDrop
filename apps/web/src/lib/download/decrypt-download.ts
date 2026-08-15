@@ -23,6 +23,14 @@ export interface EncryptableFile {
   encrypted: boolean;
   wrappedKeyCiphertext: string | null;
   wrappedKeyIv: string | null;
+  /**
+   * Total byte length of the stored ciphertext (nonce + every framed
+   * chunk), as recorded by the server independently of the bytes served
+   * back on download. Passed through to the chunked decryptor so it can
+   * detect a ciphertext truncated by a compromised/buggy storage backend
+   * — see `decryptFileStreamWithEmbeddedNonce` in `lib/crypto`.
+   */
+  sizeBytes: number;
 }
 
 /**
@@ -63,13 +71,15 @@ export async function unwrapFileKey(
  * resulting plaintext is fully realized as a `Blob`, matching the existing
  * download/preview UX used for legacy files. Rejects with
  * `DecryptionError` (no partial/corrupt Blob is ever produced) if any
- * chunk fails GCM authentication — tampered ciphertext, truncation, or a
- * wrong key.
+ * chunk fails GCM authentication, or if the decrypted stream turns out
+ * shorter or longer than `expectedTotalBytes` — tampered ciphertext,
+ * truncation (including whole trailing chunks removed), or a wrong key.
  */
 export async function decryptResponseToBlob(
   response: Response,
   fileKey: CryptoKey,
-  mimeType: string
+  mimeType: string,
+  expectedTotalBytes: number
 ): Promise<Blob> {
   if (!response.body) {
     throw new DecryptionError("Encrypted response has no body to decrypt");
@@ -77,7 +87,8 @@ export async function decryptResponseToBlob(
 
   const decryptedStream = decryptFileStreamWithEmbeddedNonce(
     response.body,
-    fileKey
+    fileKey,
+    expectedTotalBytes
   );
 
   try {
@@ -117,7 +128,7 @@ export async function fetchFileBlob(
   }
 
   const fileKey = await unwrapFileKey(file, vaultDek);
-  return decryptResponseToBlob(response, fileKey, file.mimeType);
+  return decryptResponseToBlob(response, fileKey, file.mimeType, file.sizeBytes);
 }
 
 /** Triggers a browser save of `blob` named `fileName` via a throwaway object URL. */
