@@ -41,6 +41,13 @@ export default function FolderCard({
   async function handleRename(newName: string) {
     if (!accessToken) return;
 
+    if (nameError) {
+      alert(
+        "This folder's current name couldn't be loaded, so renaming now would overwrite it. Reload and try again."
+      );
+      return;
+    }
+
     if (folder.encrypted) {
       if (!vaultDek) {
         alert("Vault is locked. Unlock it and try again.");

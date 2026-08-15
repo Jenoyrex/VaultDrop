@@ -125,6 +125,13 @@ export default function FileCard({
   async function handleRename(newName: string) {
     if (!accessToken) return;
 
+    if (nameError) {
+      alert(
+        "This file's current name couldn't be loaded, so renaming now would overwrite it. Reload and try again."
+      );
+      return;
+    }
+
     if (file.encrypted) {
       if (!vaultDek) {
         alert("Vault is locked. Unlock it and try again.");
