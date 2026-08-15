@@ -1,0 +1,53 @@
+name: CI
+
+# No path filters: every PR and every push to main must be validated,
+# regardless of which package(s) it touches.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Typecheck, test, and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node version matches this repo's declared floor
+      # (package.json "engines".node: ">=18.18.0").
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.18.0"
+
+      # Activates the exact pnpm version pinned in package.json
+      # ("packageManager": "pnpm@9.0.0") via Node's built-in Corepack,
+      # rather than hardcoding a separate, possibly-drifting version here.
+      - name: Enable pnpm via Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
+
+      # Fails immediately if pnpm-lock.yaml is out of sync with any
+      # package.json, instead of silently installing a different tree.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Generates @prisma/client's schema-specific types. Required before
+      # typecheck/build/test — nothing else in `pnpm install` does this,
+      # and it needs no database connection (only network access to fetch
+      # the Prisma engine binary).
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # No database, external services, or secrets are required: the test
+      # suite uses an in-memory Prisma stand-in and mocked storage
+      # adapters throughout.
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
