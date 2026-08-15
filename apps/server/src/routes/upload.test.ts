@@ -2,12 +2,13 @@ import { randomUUID, webcrypto } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import type { ServerEnv } from "@vaultdrop/config";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
 import { LocalStorageAdapter } from "../storage/local-storage-adapter.js";
+import { CloudStorageAdapter } from "../storage/cloud-storage-adapter.js";
 import { createFakePrisma } from "../test-support/fake-prisma.js";
 
 const { subtle } = webcrypto;
@@ -210,4 +211,61 @@ describe("file upload routes", () => {
       expect(onDisk.equals(plaintext)).toBe(true);
     });
   });
+});
+
+describe("POST /files/upload-encrypted against a real CloudStorageAdapter (regression: oversized upload must fail cleanly, not hang)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it(
+    "rejects an oversized encrypted upload with 400 instead of hanging indefinitely",
+    async () => {
+      const ownerId = randomUUID();
+      const vaultId = randomUUID();
+      const { prisma } = createFakePrisma([
+        { id: vaultId, ownerId, name: "Test Vault" }
+      ]);
+
+      // A real CloudStorageAdapter/S3Client/Upload — no mocking of
+      // putStream itself, so this genuinely exercises the fixed code
+      // path. It never reaches the network: the oversized-body guard in
+      // file.routes.ts errors the request stream before enough bytes
+      // accumulate for `Upload` to attempt a `client.send()` call, which
+      // is exactly the scenario that used to hang indefinitely (see
+      // cloud-storage-adapter.ts's `putStream`). `delete` is stubbed out
+      // only because the route's unrelated error-cleanup path would
+      // otherwise issue a real DeleteObjectCommand network call here —
+      // that cleanup call is incidental to this test, not the behavior
+      // under test.
+      const storage = new CloudStorageAdapter({ bucket: "test-bucket", region: "us-east-1" });
+      vi.spyOn(storage, "delete").mockResolvedValue(undefined);
+
+      const smallLimitEnv: ServerEnv = { ...TEST_ENV, STORAGE_DRIVER: "cloud", MAX_UPLOAD_BYTES: 1000 };
+      const app = createApp(prisma, smallLimitEnv, storage);
+      const token = bearerTokenFor(ownerId);
+
+      const oversizedBody = Buffer.alloc(5000, 1);
+
+      const params = new URLSearchParams({
+        vaultId,
+        encryptedName: "abc",
+        nameIv: "def",
+        mimeType: "application/octet-stream",
+        encryptionVersion: "1",
+        wrappedKeyCiphertext: "abc",
+        wrappedKeyIv: "def"
+      });
+
+      const response = await request(app)
+        .post(`/files/upload-encrypted?${params.toString()}`)
+        .set("Authorization", `Bearer ${token}`)
+        .set("Content-Type", "application/octet-stream")
+        .send(oversizedBody);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.message).toMatch(/exceeds the maximum upload size/i);
+    },
+    { timeout: 5000 }
+  );
 });

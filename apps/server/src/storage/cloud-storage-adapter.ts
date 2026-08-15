@@ -1,3 +1,4 @@
+import { pipeline } from "node:stream/promises";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -61,7 +62,18 @@ export class CloudStorageAdapter implements StorageAdapter {
     contentType: string
   ): Promise<StorageObjectMeta> {
     const counter = new CountingPassThrough();
-    data.pipe(counter);
+
+    // `pipeline` (unlike a raw `.pipe()`) propagates a `data` error into a
+    // rejection here *and* destroys `counter` with that same error. That
+    // matters because `counter` is also `Upload`'s request body below: a
+    // raw `.pipe()` would leave `counter` open forever once `data` errors
+    // (e.g. the upload route's max-size guard rejecting an oversized
+    // file), so `upload.done()` would never resolve or reject and the
+    // request would hang indefinitely instead of failing cleanly. Started
+    // (not awaited) before constructing `Upload` so both run concurrently
+    // — `Upload` needs to be draining `counter` as bytes arrive, not after
+    // the whole pipeline has already finished.
+    const pipelineDone = pipeline(data, counter);
 
     const upload = new Upload({
       client: this.client,
@@ -73,7 +85,7 @@ export class CloudStorageAdapter implements StorageAdapter {
       }
     });
 
-    await upload.done();
+    await Promise.all([pipelineDone, upload.done()]);
 
     return {
       key,
