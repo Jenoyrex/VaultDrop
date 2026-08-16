@@ -6,15 +6,17 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "clean": "rm -rf dist",
     "prisma:generate": "prisma generate",
-"prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.679.0",
+    "@aws-sdk/client-s3": "^3.1109.0",
+    "@aws-sdk/lib-storage": "^3.679.0",
     "@aws-sdk/s3-request-presigner": "^3.679.0",
     "@prisma/client": "^5.22.0",
     "@vaultdrop/config": "workspace:*",
@@ -22,6 +24,8 @@
     "@vaultdrop/types": "workspace:*",
     "cors": "^2.8.5",
     "express": "^4.21.1",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^7.1.0",
     "mime-types": "^2.1.35",
     "multer": "^1.4.5-lts.1",
     "zod": "^3.23.8"
@@ -32,8 +36,11 @@
     "@types/mime-types": "^2.1.4",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.7.5",
+    "@types/supertest": "^6.0.2",
     "prisma": "^5.22.0",
+    "supertest": "^7.0.0",
     "tsx": "^4.19.1",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
   }
 }

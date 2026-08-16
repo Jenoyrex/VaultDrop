@@ -7,7 +7,7 @@ export function createAuthMiddleware(env: ServerEnv) {
   return function requireAuth(req: Request, _res: Response, next: NextFunction): void {
     const header = req.headers.authorization;
     if (!header || !header.startsWith("Bearer ")) {
-      next(AppError.unauthorized("Missing bearer token"));
+      next(AppError.invalidToken("Missing bearer token"));
       return;
     }
     const token = header.slice("Bearer ".length).trim();
@@ -16,10 +16,10 @@ export function createAuthMiddleware(env: ServerEnv) {
       next();
     } catch (error) {
       if (error instanceof InvalidTokenError) {
-        next(AppError.unauthorized(error.message));
+        next(AppError.invalidToken(error.message));
         return;
       }
-      next(AppError.unauthorized());
+      next(AppError.invalidToken());
     }
   };
 }

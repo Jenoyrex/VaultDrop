@@ -6,16 +6,19 @@ import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { AppError } from "../utils/app-error.js";
 import { AuthService } from "../services/auth.service.js";
-import { loginSchema, registerSchema } from "./auth.schemas.js";
+import { changePasswordSchema, loginSchema, registerSchema } from "./auth.schemas.js";
+import { createAuthRateLimiters } from "../middleware/rate-limit.js";
 
 export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
   const router = Router();
   const authService = new AuthService(prisma, env);
   const requireAuth = createAuthMiddleware(env);
   const usernameQuerySchema = z.object({ username: z.string().min(1).max(32) });
+  const { credentialLimiter, enumerationLimiter } = createAuthRateLimiters(env);
 
   router.post(
     "/register",
+    credentialLimiter,
     asyncHandler(async (req, res) => {
       const body = registerSchema.parse(req.body);
       const result = await authService.register(body.username, body.password);
@@ -25,6 +28,7 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
 
   router.get(
     "/check-username",
+    enumerationLimiter,
     asyncHandler(async (req, res) => {
       const username = usernameQuerySchema.parse(req.query).username;
       const exists = await authService.usernameExists(username);
@@ -34,6 +38,7 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
 
   router.post(
     "/login",
+    credentialLimiter,
     asyncHandler(async (req, res) => {
       const body = loginSchema.parse(req.body);
       const result = await authService.login(body.username, body.password);
@@ -58,6 +63,31 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
       }
       const user = await authService.getCurrentUser(req.user.sub);
       res.status(200).json({ user });
+    })
+  );
+
+  // Rate-limited like /auth/login (same Argon2-verify cost profile) and
+  // authenticated, so a valid JWT is a precondition for even attempting
+  // this — but the JWT alone is never sufficient: `currentPassword` is
+  // independently re-verified inside AuthService.changePassword before
+  // anything is written. See that method for the completeness/atomicity
+  // guarantees around `vaults`.
+  router.put(
+    "/password",
+    credentialLimiter,
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) {
+        throw AppError.unauthorized();
+      }
+      const body = changePasswordSchema.parse(req.body);
+      await authService.changePassword(
+        req.user.sub,
+        body.currentPassword,
+        body.newPassword,
+        body.vaults
+      );
+      res.status(204).send();
     })
   );
 

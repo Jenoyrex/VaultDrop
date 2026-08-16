@@ -1,16 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadWebEnv } from "@vaultdrop/config";
+import { fileApi } from "@/lib/api-client";
+import { unwrapFileKey, decryptResponseToBlob } from "@/lib/download/decrypt-download";
 
-const env = loadWebEnv({
-  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
-});
+/** The subset of a FileDTO needed to load (and, if encrypted, decrypt) its preview. */
+export interface PreviewableFile {
+  id: string;
+  mimeType: string;
+  encrypted: boolean;
+  wrappedKeyCiphertext: string | null;
+  wrappedKeyIv: string | null;
+  sizeBytes: number;
+}
 
 export function useFilePreview(
-  fileId: string,
-  mimeType: string,
-  token: string | null
+  file: PreviewableFile,
+  token: string | null,
+  vaultDek: CryptoKey | undefined
 ) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,10 +25,17 @@ export function useFilePreview(
   useEffect(() => {
     if (!token) return;
 
-    const isImage = mimeType.startsWith("image/");
-    const isPdf = mimeType === "application/pdf";
+    const isImage = file.mimeType.startsWith("image/");
+    const isPdf = file.mimeType === "application/pdf";
 
     if (!isImage && !isPdf) {
+      return;
+    }
+
+    // An encrypted file's preview can't be decrypted until this tab holds
+    // the vault's unwrapped DEK — skip loading rather than fetching
+    // ciphertext there's no key to decrypt yet.
+    if (file.encrypted && !vaultDek) {
       return;
     }
 
@@ -31,20 +45,20 @@ export function useFilePreview(
       try {
         setLoading(true);
 
-        const response = await fetch(
-          `${env.NEXT_PUBLIC_API_URL}/files/${fileId}/preview`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          }
-        );
+        const response = await fileApi.preview(file.id, token as string);
 
         if (!response.ok) {
           throw new Error("Failed to load preview");
         }
 
-        const blob = await response.blob();
+        const blob = file.encrypted
+          ? await decryptResponseToBlob(
+              response,
+              await unwrapFileKey(file, vaultDek as CryptoKey),
+              file.mimeType,
+              file.sizeBytes
+            )
+          : await response.blob();
 
         objectUrl = URL.createObjectURL(blob);
 
@@ -63,7 +77,15 @@ export function useFilePreview(
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [fileId, mimeType, token]);
+  }, [
+    file.id,
+    file.mimeType,
+    file.encrypted,
+    file.wrappedKeyCiphertext,
+    file.wrappedKeyIv,
+    token,
+    vaultDek
+  ]);
 
   return {
     previewUrl,

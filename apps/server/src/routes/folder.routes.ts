@@ -4,37 +4,74 @@ import type { PrismaClient } from "@prisma/client";
 import type { ServerEnv } from "@vaultdrop/config";
 import { asyncHandler } from "../utils/async-handler.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
+import type { RateLimitRequestHandler } from "express-rate-limit";
 import { AppError } from "../utils/app-error.js";
 import { FolderService } from "../services/folder.service.js";
 
-export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router {
+export function createFolderRouter(
+  prisma: PrismaClient,
+  env: ServerEnv,
+  generalApiLimiter: RateLimitRequestHandler
+): Router {
   const router = Router();
   const folderService = new FolderService(prisma);
   const requireAuth = createAuthMiddleware(env);
 
-  const createFolderSchema = z.object({
-    name: z.string().min(1).max(120),
-    vaultId: z.string().uuid(),
-    parentId: z.string().uuid().nullish()
-  });
+  // Discriminated create payload: a legacy folder is created with a
+  // plaintext `name`; a folder in an encrypted vault with a client-
+  // encrypted `{ encryptedName, nameIv }` pair — never a plaintext name.
+  const createFolderSchema = z.union([
+    z.object({
+      vaultId: z.string().uuid(),
+      parentId: z.string().uuid().nullish(),
+      name: z.string().min(1).max(120)
+    }),
+    z.object({
+      vaultId: z.string().uuid(),
+      parentId: z.string().uuid().nullish(),
+      encryptedName: z.string().min(1),
+      nameIv: z.string().min(1)
+    })
+  ]);
 
-  const updateFolderSchema = z.object({
-    name: z.string().min(1).max(120).optional(),
-    parentId: z.string().uuid().nullable().optional()
-  });
+  // `name`/`encryptedName` are both optional so a parentId-only move (no
+  // rename) keeps working; at most one of the two may be supplied, and
+  // `encryptedName`/`nameIv` must be supplied together. Which one is
+  // actually allowed for a given folder is enforced in FolderService
+  // against that folder's own `encrypted` flag, not just by this schema.
+  const updateFolderSchema = z
+    .object({
+      name: z.string().min(1).max(120).optional(),
+      encryptedName: z.string().min(1).optional(),
+      nameIv: z.string().min(1).optional(),
+      parentId: z.string().uuid().nullable().optional()
+    })
+    .refine((data) => !(data.name !== undefined && data.encryptedName !== undefined), {
+      message: "Provide either name or encryptedName, not both"
+    })
+    .refine((data) => (data.encryptedName === undefined) === (data.nameIv === undefined), {
+      message: "encryptedName and nameIv must be provided together"
+    });
 
   const contentsQuerySchema = z.object({
     vaultId: z.string().uuid(),
     folderId: z.string().uuid().optional()
   });
 
+  // `query` is optional: omitting it requests the unfiltered subtree
+  // (every folder/file in scope, ciphertext fields included as-is) for an
+  // encrypted vault's client to decrypt and search locally, since the
+  // server cannot match a query string against ciphertext. Legacy vaults
+  // keep always supplying `query` and get the existing server-side
+  // substring-matched behavior.
   const searchQuerySchema = z.object({
     vaultId: z.string().uuid(),
     folderId: z.string().uuid().optional(),
-    query: z.string().min(1)
+    query: z.string().min(1).optional()
   });
 
   router.use(requireAuth);
+  router.use(generalApiLimiter);
 
   router.post(
     "/",
@@ -43,8 +80,10 @@ export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router
       const body = createFolderSchema.parse(req.body);
       const folder = await folderService.createFolder(req.user.sub, {
         vaultId: body.vaultId,
-        name: body.name,
-        parentId: body.parentId ?? null
+        parentId: body.parentId ?? null,
+        ...("name" in body
+          ? { name: body.name }
+          : { encryptedName: body.encryptedName, nameIv: body.nameIv })
       });
       res.status(201).json({ folder });
     })
@@ -72,7 +111,7 @@ export function createFolderRouter(prisma: PrismaClient, env: ServerEnv): Router
       const results = await folderService.searchContents(
         query.vaultId,
         req.user.sub,
-        query.query,
+        query.query ?? null,
         query.folderId ?? null
       );
       res.status(200).json(results);

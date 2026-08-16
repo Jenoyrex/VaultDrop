@@ -11,23 +11,37 @@ import {
   Upload,
   Loader2,
   FolderPlus,
+  KeyRound,
   Vault as VaultIcon,
   Search,
   X
 } from "lucide-react";
 
+import type { VaultDTO } from "@vaultdrop/types";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useVaultKeys } from "@/components/providers/vault-key-provider";
+import { hasEncryptionEnvelope, createRecoveryEnvelope } from "@/lib/vault-keys";
+import { encryptText } from "@/lib/crypto";
+import {
+  buildDecryptedSearchIndex,
+  filterDecryptedSearchIndex,
+  type DecryptedSearchIndex
+} from "@/lib/search/local-search";
 import {
   fileApi,
   folderApi,
+  vaultApi,
+  UnsupportedBrowserError,
   type FileDTO,
-  type FolderDTO,
-  type SearchResponse
+  type FolderDTO
 } from "@/lib/api-client";
 
 import FileCard from "@/components/file/FileCard";
+import FolderCard from "@/components/folder/FolderCard";
 import FolderGrid from "@/components/folder/FolderGrid";
 import CreateFolderDialog from "@/components/folder/CreateFolderDialog";
+import UnlockVaultGate from "@/components/vault/UnlockVaultGate";
+import RecoveryKeyDialog from "@/components/vault/RecoveryKeyDialog";
 
 interface BreadcrumbEntry {
   id: string | null;
@@ -39,10 +53,14 @@ const VAULT_ROOT_CRUMB: BreadcrumbEntry = { id: null, name: "Vault" };
 export default function VaultPage() {
   const params = useParams();
   const { accessToken } = useAuth();
+  const { isUnlocked, getVaultKey } = useVaultKeys();
 
   const vaultId = params.vaultId as string;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [vault, setVault] = useState<VaultDTO | null>(null);
+  const [vaultLoading, setVaultLoading] = useState(true);
 
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbEntry[]>([
     VAULT_ROOT_CRUMB
@@ -55,15 +73,35 @@ export default function VaultPage() {
 
   const [showFolderDialog, setShowFolderDialog] = useState(false);
 
+  const [pendingRecoveryKey, setPendingRecoveryKey] = useState<string | null>(null);
+  const [settingUpRecovery, setSettingUpRecovery] = useState(false);
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResponse | null>(
+  const [searchResults, setSearchResults] = useState<DecryptedSearchIndex | null>(
     null
   );
   const [searching, setSearching] = useState(false);
   const searchRequestIdRef = useRef(0);
 
+  // For an encrypted vault: the decrypted, unfiltered subtree for the
+  // current folder, fetched once per folder navigation and filtered
+  // locally (no further network calls) on every keystroke. Legacy vaults
+  // never populate this — they query the server per debounced keystroke
+  // instead. Cleared whenever the search scope changes (folder navigation
+  // or vault switch) below.
+  const searchIndexRef = useRef<DecryptedSearchIndex | null>(null);
+
   const currentFolderId =
     breadcrumbs[breadcrumbs.length - 1]?.id ?? null;
+
+  const encryptedVault = vault !== null && hasEncryptionEnvelope(vault);
+  // Only relevant once the vault is confirmed unlocked (see `needsUnlock`
+  // below, which gates all of the JSX that can reach this value).
+  const vaultDek = encryptedVault ? getVaultKey(vaultId) : undefined;
+
+  useEffect(() => {
+    searchIndexRef.current = null;
+  }, [vaultId, currentFolderId]);
 
   const loadContents = useCallback(
     async (folderId: string | null) => {
@@ -98,10 +136,59 @@ export default function VaultPage() {
     setBreadcrumbs([VAULT_ROOT_CRUMB]);
   }, [vaultId]);
 
+  const loadVault = useCallback(async () => {
+    if (!accessToken) {
+      setVaultLoading(false);
+      return;
+    }
+
+    try {
+      setVaultLoading(true);
+      const response = await vaultApi.get(vaultId, accessToken);
+      setVault(response.vault);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setVaultLoading(false);
+    }
+  }, [accessToken, vaultId]);
+
+  useEffect(() => {
+    loadVault();
+  }, [loadVault]);
+
+  // Null on a legacy (pre-encryption) vault, so it never gates — this
+  // vault's contents load and render exactly as before this checkpoint.
+  const needsUnlock =
+    vault !== null && hasEncryptionEnvelope(vault) && !isUnlocked(vault.id);
+
   useEffect(() => {
     loadContents(currentFolderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadContents, currentFolderId]);
+
+  // For a legacy vault, the server does the substring match and this
+  // returns its (already-filtered) result directly. For an encrypted
+  // vault, the server cannot match a query against ciphertext — instead
+  // this fetches the unfiltered subtree once (cached in `searchIndexRef`
+  // until the folder or vault changes), decrypts every name in it, and
+  // filters that decrypted index locally with no further network calls.
+  const loadSearchIndex = useCallback(async (): Promise<DecryptedSearchIndex | null> => {
+    if (!accessToken) return null;
+
+    if (encryptedVault) {
+      if (!vaultDek) return null;
+
+      if (!searchIndexRef.current) {
+        const raw = await folderApi.search(vaultId, null, currentFolderId, accessToken);
+        searchIndexRef.current = await buildDecryptedSearchIndex(raw, vaultDek);
+      }
+
+      return searchIndexRef.current;
+    }
+
+    return null;
+  }, [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId]);
 
   const runSearch = useCallback(async () => {
     const trimmed = searchQuery.trim();
@@ -117,12 +204,25 @@ export default function VaultPage() {
     try {
       setSearching(true);
 
-      const results = await folderApi.search(
-        vaultId,
-        trimmed,
-        currentFolderId,
-        accessToken
-      );
+      let results: DecryptedSearchIndex;
+
+      if (encryptedVault) {
+        const index = await loadSearchIndex();
+        results = index
+          ? filterDecryptedSearchIndex(index, trimmed)
+          : { folders: [], files: [] };
+      } else {
+        const raw = await folderApi.search(
+          vaultId,
+          trimmed,
+          currentFolderId,
+          accessToken
+        );
+        // Legacy names never need decryption (resolveDisplayName is a
+        // pass-through when `encrypted` is false) — reusing the same
+        // decorator keeps rendering/path-label code identical either way.
+        results = await buildDecryptedSearchIndex(raw, undefined);
+      }
 
       if (requestId === searchRequestIdRef.current) {
         setSearchResults(results);
@@ -138,7 +238,7 @@ export default function VaultPage() {
         setSearching(false);
       }
     }
-  }, [searchQuery, accessToken, vaultId, currentFolderId]);
+  }, [searchQuery, accessToken, vaultId, currentFolderId, encryptedVault, loadSearchIndex]);
 
   // Recursive search — scoped to whichever folder is currently open (or
   // the whole vault at root) — filters as the user types, debounced so
@@ -161,10 +261,10 @@ export default function VaultPage() {
     };
   }, [searchQuery, currentFolderId, runSearch]);
 
-  function openFolder(folder: FolderDTO) {
+  function openFolder(folder: FolderDTO, displayName: string) {
     setBreadcrumbs((prev) => [
       ...prev,
-      { id: folder.id, name: folder.name }
+      { id: folder.id, name: displayName }
     ]);
   }
 
@@ -176,29 +276,52 @@ export default function VaultPage() {
     async (filesToUpload: File[]) => {
       if (!accessToken || filesToUpload.length === 0) return;
 
+      // Files uploaded into an encrypted vault are always encrypted
+      // client-side first; legacy (non-encrypted) vaults keep uploading
+      // plaintext exactly as before. The upload UI only renders once
+      // `!needsUnlock`, so an encrypted vault's DEK is guaranteed to
+      // already be unlocked here.
+      if (encryptedVault && !vaultDek) {
+        console.error("Encrypted vault has no unlocked key in memory");
+        alert("Upload failed. Please unlock the vault and try again.");
+        return;
+      }
+
       try {
         setUploading(true);
 
         await Promise.all(
           filesToUpload.map((file) =>
-            fileApi.upload(
-              vaultId,
-              file,
-              accessToken,
-              currentFolderId
-            )
+            vaultDek
+              ? fileApi.uploadEncrypted(
+                  vaultId,
+                  file,
+                  vaultDek,
+                  accessToken,
+                  currentFolderId
+                )
+              : fileApi.upload(
+                  vaultId,
+                  file,
+                  accessToken,
+                  currentFolderId
+                )
           )
         );
 
         await loadContents(currentFolderId);
       } catch (err) {
         console.error(err);
-        alert("Upload failed.");
+        alert(
+          err instanceof UnsupportedBrowserError
+            ? err.message
+            : "Upload failed."
+        );
       } finally {
         setUploading(false);
       }
     },
-    [accessToken, vaultId, currentFolderId, loadContents]
+    [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId, loadContents]
   );
 
   async function handleUpload(
@@ -232,31 +355,70 @@ export default function VaultPage() {
   async function createFolder(name: string) {
     if (!accessToken) return;
 
-    await folderApi.create(
-      vaultId,
-      name,
-      accessToken,
-      currentFolderId ?? undefined
-    );
+    if (encryptedVault) {
+      if (!vaultDek) {
+        alert("Vault is locked. Unlock it and try again.");
+        return;
+      }
+
+      const { ciphertext, iv } = await encryptText(name, vaultDek);
+
+      await folderApi.create(
+        vaultId,
+        { encryptedName: ciphertext, nameIv: iv },
+        accessToken,
+        currentFolderId ?? undefined
+      );
+    } else {
+      await folderApi.create(
+        vaultId,
+        { name },
+        accessToken,
+        currentFolderId ?? undefined
+      );
+    }
 
     await loadContents(currentFolderId);
   }
 
-  function formatPath(path: { id: string; name: string }[]): string {
-    return ["Vault", ...path.map((segment) => segment.name)].join(" / ");
+  async function handleSetUpRecoveryKey() {
+    if (!accessToken || !vaultDek) return;
+
+    try {
+      setSettingUpRecovery(true);
+      const { recoveryKey, envelope } = await createRecoveryEnvelope(vaultDek);
+      await vaultApi.enrollRecoveryKey(vaultId, envelope, accessToken);
+      setPendingRecoveryKey(recoveryKey);
+    } catch (err) {
+      console.error(err);
+      alert("Couldn't set up a recovery key. Please try again.");
+    } finally {
+      setSettingUpRecovery(false);
+    }
+  }
+
+  function handleRecoveryKeyDialogDone() {
+    setPendingRecoveryKey(null);
+    loadVault();
+  }
+
+  function formatPathLabels(pathLabels: string[]): string {
+    return ["Vault", ...pathLabels].join(" / ");
   }
 
   function openSearchResultFolder(
-    folder: { id: string; name: string },
-    path: { id: string; name: string }[]
+    folder: { id: string },
+    displayName: string,
+    path: { id: string }[],
+    pathLabels: string[]
   ) {
     setBreadcrumbs([
       VAULT_ROOT_CRUMB,
-      ...path.map((segment) => ({
+      ...path.map((segment, index) => ({
         id: segment.id,
-        name: segment.name
+        name: pathLabels[index] ?? ""
       })),
-      { id: folder.id, name: folder.name }
+      { id: folder.id, name: displayName }
     ]);
 
     setSearchQuery("");
@@ -299,46 +461,78 @@ export default function VaultPage() {
 
           </div>
 
-          <div className="flex gap-3">
+          {!needsUnlock && !vaultLoading && (
+            <div className="flex gap-3">
 
-            <button
-              onClick={() => setShowFolderDialog(true)}
-              className="flex items-center gap-2 rounded-lg border px-5 py-3"
-            >
-              <FolderPlus className="h-5 w-5" />
-              New Folder
-            </button>
-
-            <input
-              hidden
-              ref={fileInputRef}
-              type="file"
-              onChange={handleUpload}
-            />
-
-            <button
-              disabled={uploading}
-              onClick={() =>
-                fileInputRef.current?.click()
-              }
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-primary-foreground"
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-5 w-5" />
-                  Upload File
-                </>
+              {encryptedVault && (
+                <button
+                  onClick={handleSetUpRecoveryKey}
+                  disabled={settingUpRecovery || !vaultDek}
+                  className="flex items-center gap-2 rounded-lg border px-5 py-3 disabled:opacity-50"
+                >
+                  {settingUpRecovery ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-5 w-5" />
+                  )}
+                  {vault?.hasRecoveryKey
+                    ? "Regenerate Recovery Key"
+                    : "Set Up Recovery Key"}
+                </button>
               )}
-            </button>
 
-          </div>
+              <button
+                onClick={() => setShowFolderDialog(true)}
+                className="flex items-center gap-2 rounded-lg border px-5 py-3"
+              >
+                <FolderPlus className="h-5 w-5" />
+                New Folder
+              </button>
+
+              <input
+                hidden
+                ref={fileInputRef}
+                type="file"
+                onChange={handleUpload}
+              />
+
+              <button
+                disabled={uploading}
+                onClick={() =>
+                  fileInputRef.current?.click()
+                }
+                className="flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-primary-foreground"
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-5 w-5" />
+                    Upload File
+                  </>
+                )}
+              </button>
+
+            </div>
+          )}
 
         </div>
+
+        {vaultLoading ? (
+
+          <div className="flex justify-center py-20">
+            <Loader2 className="h-10 w-10 animate-spin" />
+          </div>
+
+        ) : needsUnlock ? (
+
+          <UnlockVaultGate vault={vault!} onUnlocked={() => {}} />
+
+        ) : (
+          <>
 
         <nav className="flex flex-wrap items-center gap-1 text-sm">
           {breadcrumbs.map((crumb, index) => {
@@ -452,7 +646,12 @@ export default function VaultPage() {
                         key={folder.id}
                         folder={folder}
                         onClick={() =>
-                          openSearchResultFolder(folder, folder.path)
+                          openSearchResultFolder(
+                            folder,
+                            folder.displayName,
+                            folder.path,
+                            folder.pathLabels
+                          )
                         }
                         onRenamed={() => {
                           loadContents(currentFolderId);
@@ -460,7 +659,7 @@ export default function VaultPage() {
                         }}
                         pathLabel={
                           folder.parentId !== currentFolderId
-                            ? formatPath(folder.path)
+                            ? formatPathLabels(folder.pathLabels)
                             : undefined
                         }
                       />
@@ -484,7 +683,7 @@ export default function VaultPage() {
                         }}
                         pathLabel={
                           file.folderId !== currentFolderId
-                            ? formatPath(file.path)
+                            ? formatPathLabels(file.pathLabels)
                             : undefined
                         }
                       />
@@ -541,6 +740,9 @@ export default function VaultPage() {
 
         </div>
 
+          </>
+        )}
+
       </div>
 
       <CreateFolderDialog
@@ -550,6 +752,13 @@ export default function VaultPage() {
         }
         onCreate={createFolder}
       />
+
+      {pendingRecoveryKey && (
+        <RecoveryKeyDialog
+          recoveryKey={pendingRecoveryKey}
+          onDone={handleRecoveryKeyDialogDone}
+        />
+      )}
     </>
   );
 }

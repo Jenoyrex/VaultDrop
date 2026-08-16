@@ -23,12 +23,18 @@ export default function RenameDialog({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Re-seeds `name` only on the open transition, not on every render where
+  // `initialName` happens to change — `initialName` typically comes from an
+  // async-resolving (e.g. decrypting) display name upstream, and including
+  // it here would silently overwrite whatever the user has already typed
+  // once that resolution lands while the dialog is still open.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
       setName(initialName);
       setError(null);
     }
-  }, [open, initialName]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -44,7 +50,15 @@ export default function RenameDialog({
       ? `${trimmed}${extension}`
       : trimmed;
 
-    if (finalName === initialName) {
+    // Compare against the COMPLETE original name (extension included where
+    // applicable) — `initialName` alone is only the base name for a file,
+    // so comparing `finalName` (which always includes the extension) to it
+    // directly would never detect "unchanged" for any extensioned file.
+    const initialFullName = extension
+      ? `${initialName}${extension}`
+      : initialName;
+
+    if (finalName === initialFullName) {
       onClose();
       return;
     }

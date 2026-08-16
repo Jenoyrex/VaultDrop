@@ -1,3 +1,4 @@
+import { pipeline } from "node:stream/promises";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -5,7 +6,9 @@ import {
   PutObjectCommand,
   S3Client
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import type { StorageAdapter, StorageObjectMeta, StoragePutInput } from "@vaultdrop/types";
+import { CountingPassThrough } from "./counting-stream.js";
 
 export interface CloudStorageAdapterOptions {
   bucket: string;
@@ -50,6 +53,44 @@ export class CloudStorageAdapter implements StorageAdapter {
       key: input.key,
       sizeBytes: input.data.byteLength,
       contentType: input.contentType
+    };
+  }
+
+  async putStream(
+    key: string,
+    data: NodeJS.ReadableStream,
+    contentType: string
+  ): Promise<StorageObjectMeta> {
+    const counter = new CountingPassThrough();
+
+    // `pipeline` (unlike a raw `.pipe()`) propagates a `data` error into a
+    // rejection here *and* destroys `counter` with that same error. That
+    // matters because `counter` is also `Upload`'s request body below: a
+    // raw `.pipe()` would leave `counter` open forever once `data` errors
+    // (e.g. the upload route's max-size guard rejecting an oversized
+    // file), so `upload.done()` would never resolve or reject and the
+    // request would hang indefinitely instead of failing cleanly. Started
+    // (not awaited) before constructing `Upload` so both run concurrently
+    // — `Upload` needs to be draining `counter` as bytes arrive, not after
+    // the whole pipeline has already finished.
+    const pipelineDone = pipeline(data, counter);
+
+    const upload = new Upload({
+      client: this.client,
+      params: {
+        Bucket: this.bucket,
+        Key: key,
+        Body: counter,
+        ContentType: contentType
+      }
+    });
+
+    await Promise.all([pipelineDone, upload.done()]);
+
+    return {
+      key,
+      sizeBytes: counter.bytesWritten,
+      contentType
     };
   }
 

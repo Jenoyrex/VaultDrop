@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { UserDTO } from "@vaultdrop/types";
-import { authApi, ApiError } from "@/lib/api-client";
+import { authApi, onSessionExpired, ApiError } from "@/lib/api-client";
 
 const STORAGE_KEY = "vaultdrop.session";
 
@@ -93,6 +93,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStatus("authenticated");
   }, []);
 
+  // Shared by an explicit logout and a discovered session-expiry — both
+  // end at the exact same local state, just reached differently (the
+  // latter never attempts the server-side /auth/logout call below, since
+  // a token already known to be invalid has nothing useful to revoke).
+  const clearSession = React.useCallback(() => {
+    writeStoredSession(null);
+    setUser(null);
+    setAccessToken(null);
+    setStatus("unauthenticated");
+  }, []);
+
   const logout = React.useCallback(async () => {
     if (accessToken) {
       try {
@@ -105,11 +116,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-    writeStoredSession(null);
-    setUser(null);
-    setAccessToken(null);
-    setStatus("unauthenticated");
-  }, [accessToken]);
+    clearSession();
+  }, [accessToken, clearSession]);
+
+  // Centralized session-expiry handling: any API call anywhere in the app
+  // that discovers the bearer token itself is invalid/expired (see
+  // `onSessionExpired` in api-client.ts) lands here, once, instead of each
+  // feature handling its own broken-session UI independently. This reuses
+  // the exact same `status` transition as an explicit logout, so
+  // `DashboardLayout`'s redirect-to-/auth and `VaultKeyProvider`'s
+  // clear-all-unlocked-DEKs effect (both already keyed off `status`) fire
+  // the same way for either path — no separate wiring needed for either.
+  React.useEffect(() => {
+    return onSessionExpired(() => {
+      clearSession();
+    });
+  }, [clearSession]);
 
   const value = React.useMemo<AuthContextValue>(
     () => ({ status, user, accessToken, login, register, logout }),

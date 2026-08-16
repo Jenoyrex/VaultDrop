@@ -1,9 +1,21 @@
 import { loadWebEnv } from "@vaultdrop/config";
 import type {
   AuthResponse,
+  RecoveryEnvelopeResponse,
   UserDTO,
-  VaultDTO
+  VaultDTO,
+  VaultEncryptionEnvelope,
+  VaultPasswordRewrap
 } from "@vaultdrop/types";
+import { prepareEncryptedUpload } from "@/lib/upload/encrypt-upload";
+
+/**
+ * `RequestInit["duplex"]` isn't in the TypeScript DOM lib bundled with our
+ * TS version yet, though it's supported at runtime in current browsers —
+ * required to stream a `ReadableStream` request body (see
+ * `fileApi.uploadEncrypted`) without buffering it first.
+ */
+type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
 const env = loadWebEnv({
   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
@@ -21,12 +33,82 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Fired whenever `request()` sees a `401 INVALID_TOKEN` response — the
+ * server's signal that the bearer token itself is missing, malformed, or
+ * expired, as opposed to an ordinary wrong-credential 401 (a bad login
+ * password, or a wrong current password during account password change,
+ * both of which keep the generic `UNAUTHORIZED` code and never fire this).
+ * `AuthProvider` subscribes to this to drive a single, consistent
+ * session-expired flow instead of each call site handling it separately.
+ * Listeners run synchronously; `request()` still throws its `ApiError` as
+ * before regardless, so every existing per-call `catch` keeps working
+ * unchanged.
+ */
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
 interface ApiErrorBody {
   error: {
     code: string;
     message: string;
     details?: unknown;
   };
+}
+
+export class UnsupportedBrowserError extends Error {
+  constructor() {
+    super(
+      "This browser doesn't support streaming file uploads, which encrypted vaults require."
+    );
+    this.name = "UnsupportedBrowserError";
+  }
+}
+
+let cachedStreamingBodySupport: boolean | null = null;
+
+/**
+ * Feature-detects whether `fetch` can stream a `ReadableStream` request
+ * body (the standard `duplex`-getter probe). Encrypted uploads rely on
+ * this to send ciphertext chunk-by-chunk without ever buffering the whole
+ * encrypted file in memory first; there is no buffered fallback this
+ * checkpoint, so an unsupported browser gets a clear error instead.
+ */
+function supportsStreamingRequestBody(): boolean {
+  if (cachedStreamingBodySupport !== null) {
+    return cachedStreamingBodySupport;
+  }
+
+  if (typeof Request === "undefined" || typeof ReadableStream === "undefined") {
+    cachedStreamingBodySupport = false;
+    return false;
+  }
+
+  let duplexAccessed = false;
+
+  try {
+    const hasContentType = new Request("https://example.com", {
+      method: "POST",
+      body: new ReadableStream(),
+      get duplex() {
+        duplexAccessed = true;
+        return "half";
+      }
+    } as RequestInitWithDuplex).headers.has("Content-Type");
+
+    cachedStreamingBodySupport = duplexAccessed && !hasContentType;
+  } catch {
+    cachedStreamingBodySupport = false;
+  }
+
+  return cachedStreamingBodySupport;
 }
 
 async function request<T>(
@@ -64,11 +146,17 @@ async function request<T>(
   if (!response.ok) {
     const body = data as ApiErrorBody | null;
 
-    throw new ApiError(
+    const apiError = new ApiError(
       response.status,
       body?.error?.code ?? "UNKNOWN_ERROR",
       body?.error?.message ?? "Something went wrong."
     );
+
+    if (apiError.status === 401 && apiError.code === "INVALID_TOKEN") {
+      sessionExpiredListeners.forEach((listener) => listener());
+    }
+
+    throw apiError;
   }
 
   return data as T;
@@ -80,7 +168,8 @@ export interface CheckUsernameResponse {
 
 export interface FileDTO {
   id: string;
-  name: string;
+  /** Plaintext name. Non-null for a legacy file (`encrypted` false); null when `encrypted` is true. */
+  name: string | null;
   mimeType: string;
   sizeBytes: number;
   vaultId: string;
@@ -89,15 +178,28 @@ export interface FileDTO {
   storageKey: string;
   createdAt: string;
   updatedAt: string;
+  encrypted: boolean;
+  wrappedKeyCiphertext: string | null;
+  wrappedKeyIv: string | null;
+  /** Base64-encoded AES-256-GCM ciphertext of the file's name, encrypted directly with the vault DEK. */
+  encryptedName: string | null;
+  /** Base64-encoded 12-byte IV used for the name encryption above. */
+  nameIv: string | null;
 }
 
 export interface FolderDTO {
   id: string;
-  name: string;
+  /** Plaintext name. Non-null for a legacy folder (`encrypted` false); null when `encrypted` is true. */
+  name: string | null;
   vaultId: string;
   parentId: string | null;
   createdAt: string;
   updatedAt: string;
+  encrypted: boolean;
+  /** Base64-encoded AES-256-GCM ciphertext of the folder's name, encrypted directly with the vault DEK. */
+  encryptedName: string | null;
+  /** Base64-encoded 12-byte IV used for the name encryption above. */
+  nameIv: string | null;
 }
 
 export interface FolderContentsResponse {
@@ -108,7 +210,10 @@ export interface FolderContentsResponse {
 
 export interface PathSegment {
   id: string;
-  name: string;
+  name: string | null;
+  encrypted: boolean;
+  encryptedName: string | null;
+  nameIv: string | null;
 }
 
 export interface FolderSearchResult extends FolderDTO {
@@ -123,6 +228,17 @@ export interface SearchResponse {
   folders: FolderSearchResult[];
   files: FileSearchResult[];
 }
+
+/**
+ * A create/rename name payload: a legacy file/folder takes a plaintext
+ * `name`; an encrypted one takes a client-encrypted `{ encryptedName,
+ * nameIv }` pair instead — never a plaintext name. Callers build this by
+ * encrypting client-side first (see `lib/upload/encrypt-upload.ts` and
+ * `lib/names/resolve-name.ts`) when the target vault is encrypted.
+ */
+export type NameInput =
+  | { name: string }
+  | { encryptedName: string; nameIv: string };
 
 export const authApi = {
   checkUsername(username: string): Promise<CheckUsernameResponse> {
@@ -156,6 +272,28 @@ export const authApi = {
     return request<{ user: UserDTO }>("/auth/me", {
       token
     });
+  },
+
+  /**
+   * Atomically changes the account password and re-wraps every currently
+   * encrypted vault's DEK for it. `vaults` must be prepared by
+   * `prepareVaultRewrapsForPasswordChange` — this function never derives
+   * or touches any KEK/DEK itself, it only submits the already-computed
+   * ciphertext envelopes alongside the two passwords (sent for
+   * server-side verification/hashing only, the same trust boundary as
+   * `login`/`register`).
+   */
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+    vaults: VaultPasswordRewrap[],
+    token: string
+  ): Promise<void> {
+    return request<void>("/auth/password", {
+      method: "PUT",
+      token,
+      body: JSON.stringify({ currentPassword, newPassword, vaults })
+    });
   }
 };
 
@@ -166,11 +304,34 @@ export const vaultApi = {
     });
   },
 
-  create(name: string, token: string): Promise<{ vault: VaultDTO }> {
+  /**
+   * Fetches a single vault, including the zero-knowledge encryption
+   * metadata (KDF params + KEK-wrapped DEK) needed to unlock it — null
+   * on every encryption field for a legacy, unencrypted vault. The
+   * server scopes this to the authenticated owner; there is no public
+   * vault-lookup path.
+   */
+  get(vaultId: string, token: string): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}`, {
+      token
+    });
+  },
+
+  /**
+   * `encryption`, when supplied, is the client-generated zero-knowledge
+   * envelope (wrapped DEK + KDF params) for a new encrypted vault — see
+   * `lib/crypto/vault-keys.ts`. Omit it to create a legacy plaintext
+   * vault, unchanged from before this checkpoint.
+   */
+  create(
+    name: string,
+    token: string,
+    encryption?: VaultEncryptionEnvelope
+  ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>("/vaults", {
       method: "POST",
       token,
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ name, encryption })
     });
   },
 
@@ -178,6 +339,60 @@ export const vaultApi = {
     return request<void>(`/vaults/${vaultId}`, {
       method: "DELETE",
       token
+    });
+  },
+
+  /**
+   * Fetches the vault's recovery-wrapped DEK ciphertext — the one
+   * request that ever returns this material, used only by the
+   * client-side "unlock with recovery key" flow to unwrap it locally.
+   * Rejects with a 404 `RECOVERY_NOT_CONFIGURED` `ApiError` if the vault
+   * has no recovery envelope yet.
+   */
+  getRecoveryEnvelope(
+    vaultId: string,
+    token: string
+  ): Promise<RecoveryEnvelopeResponse> {
+    return request<RecoveryEnvelopeResponse>(`/vaults/${vaultId}/recovery-key`, {
+      token
+    });
+  },
+
+  /**
+   * Enrolls or rotates this vault's recovery envelope. `envelope` is the
+   * client-generated ciphertext/IV pair from `createRecoveryEnvelope` —
+   * never the recovery key or the DEK itself. Overwrites any previous
+   * recovery envelope outright, which is what invalidates the previous
+   * recovery key.
+   */
+  enrollRecoveryKey(
+    vaultId: string,
+    envelope: RecoveryEnvelopeResponse,
+    token: string
+  ): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/recovery-key`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(envelope)
+    });
+  },
+
+  /**
+   * Re-wraps the vault's DEK under a fresh password-derived KEK — used
+   * after a recovery-key unlock to restore normal password unlock.
+   * Callers must have already proven `envelope` was derived from the
+   * user's real, current account password (via a real `authApi.login`
+   * call) before calling this; the server cannot verify that itself.
+   */
+  rewrapEncryption(
+    vaultId: string,
+    envelope: VaultEncryptionEnvelope,
+    token: string
+  ): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/encryption`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(envelope)
     });
   }
 };
@@ -221,7 +436,7 @@ export const folderApi = {
 
   create(
     vaultId: string,
-    name: string,
+    nameInput: NameInput,
     token: string,
     parentId?: string | null
   ): Promise<{ folder: FolderDTO }> {
@@ -232,8 +447,8 @@ export const folderApi = {
         token,
         body: JSON.stringify({
           vaultId,
-          name,
-          parentId
+          parentId,
+          ...nameInput
         })
       }
     );
@@ -241,7 +456,7 @@ export const folderApi = {
 
   rename(
     folderId: string,
-    name: string,
+    nameInput: NameInput,
     token: string
   ): Promise<{ folder: FolderDTO }> {
     return request<{ folder: FolderDTO }>(
@@ -249,7 +464,7 @@ export const folderApi = {
       {
         method: "PATCH",
         token,
-        body: JSON.stringify({ name })
+        body: JSON.stringify(nameInput)
       }
     );
   },
@@ -259,14 +474,25 @@ export const folderApi = {
    * vault; inside a folder, searches only that folder's descendants.
    * Each result carries `path` — the ancestor chain — so the UI can
    * show where a match lives when it isn't in the currently open folder.
+   *
+   * `query: null` requests the unfiltered subtree instead of a filtered
+   * search — used by an encrypted vault's client to fetch the (ciphertext)
+   * candidate set once, then decrypt and filter it locally on every
+   * keystroke, since the server cannot match a query string against
+   * ciphertext. Legacy vaults always pass a real `query` and get the
+   * existing server-side substring-matched behavior.
    */
   search(
     vaultId: string,
-    query: string,
+    query: string | null,
     folderId: string | null,
     token: string
   ): Promise<SearchResponse> {
-    const params = new URLSearchParams({ vaultId, query });
+    const params = new URLSearchParams({ vaultId });
+
+    if (query !== null) {
+      params.set("query", query);
+    }
 
     if (folderId) {
       params.set("folderId", folderId);
@@ -315,6 +541,65 @@ export const fileApi = {
     return response.json();
   },
 
+  /**
+   * Encrypts `file` client-side (fresh per-file key, wrapped by
+   * `vaultDek`) and streams the ciphertext to `POST
+   * /files/upload-encrypted` as the raw request body — never as multipart
+   * form data, and never buffered whole in memory first. `vaultDek` must
+   * already be unwrapped (see `useVaultKeys().getVaultKey`); this
+   * function never derives or unwraps it itself.
+   */
+  async uploadEncrypted(
+    vaultId: string,
+    file: File,
+    vaultDek: CryptoKey,
+    token: string,
+    folderId?: string | null
+  ): Promise<{ file: FileDTO }> {
+    if (!supportsStreamingRequestBody()) {
+      throw new UnsupportedBrowserError();
+    }
+
+    const { ciphertextStream, envelope, encryptedName, nameIv } =
+      await prepareEncryptedUpload(file, vaultDek);
+
+    // Deliberately no plaintext `name` param here — the server must never
+    // receive this file's real name, not even transiently in a URL/query
+    // string that could end up in an access log.
+    const params = new URLSearchParams({
+      vaultId,
+      encryptedName,
+      nameIv,
+      mimeType: file.type || "application/octet-stream",
+      encryptionVersion: String(envelope.encryptionVersion),
+      wrappedKeyCiphertext: envelope.wrappedKeyCiphertext,
+      wrappedKeyIv: envelope.wrappedKeyIv
+    });
+
+    if (folderId) {
+      params.set("folderId", folderId);
+    }
+
+    const response = await fetch(
+      `${env.NEXT_PUBLIC_API_URL}/files/upload-encrypted?${params.toString()}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream"
+        },
+        body: ciphertextStream,
+        duplex: "half"
+      } as RequestInitWithDuplex
+    );
+
+    if (!response.ok) {
+      throw new Error("Upload failed");
+    }
+
+    return response.json();
+  },
+
   list(
     vaultId: string,
     token: string
@@ -338,6 +623,17 @@ export const fileApi = {
     );
   },
 
+  preview(fileId: string, token: string) {
+    return fetch(
+      `${env.NEXT_PUBLIC_API_URL}/files/${fileId}/preview`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+  },
+
   delete(
     fileId: string,
     token: string
@@ -353,7 +649,7 @@ export const fileApi = {
 
   rename(
     fileId: string,
-    name: string,
+    nameInput: NameInput,
     token: string
   ): Promise<{ file: FileDTO }> {
     return request<{ file: FileDTO }>(
@@ -361,7 +657,7 @@ export const fileApi = {
       {
         method: "PATCH",
         token,
-        body: JSON.stringify({ name })
+        body: JSON.stringify(nameInput)
       }
     );
   }
