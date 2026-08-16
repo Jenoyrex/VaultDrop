@@ -22,6 +22,7 @@ export default defineConfig({
     // `// @vitest-environment jsdom` comment at the top of the file,
     // rather than switching every test in this project to jsdom.
     environment: "node",
+    setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"]
   }
 });
