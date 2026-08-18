@@ -21,12 +21,13 @@ export interface AuthResponse {
 
 /**
  * Zero-knowledge encryption envelope for a vault, generated entirely
- * client-side at creation time (see `apps/web/src/lib/crypto`). Optional
- * on `CreateVaultRequest` so legacy, unencrypted vault creation keeps
- * working unchanged — omit every field for a legacy vault, or supply all
- * of them together to create an encrypted one. The server never sees the
- * plaintext password, the KEK, or the unwrapped DEK; it only stores the
- * ciphertext blobs the browser hands it.
+ * client-side at creation time (see `apps/web/src/lib/crypto`). Required
+ * on `CreateVaultRequest` as of Phase 1 — every new vault must be
+ * created encrypted, so all fields must be supplied together. (Vaults
+ * created before this requirement may still have every field `null`; see
+ * `VaultDTO`.) The server never sees the plaintext password, the KEK, or
+ * the unwrapped DEK; it only stores the ciphertext blobs the browser
+ * hands it.
  */
 export interface VaultEncryptionEnvelope {
   encryptionVersion: number;
@@ -39,7 +40,7 @@ export interface VaultEncryptionEnvelope {
 
 export interface CreateVaultRequest {
   name: string;
-  encryption?: VaultEncryptionEnvelope;
+  encryption: VaultEncryptionEnvelope;
 }
 
 /**

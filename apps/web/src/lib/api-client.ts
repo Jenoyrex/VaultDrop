@@ -318,15 +318,15 @@ export const vaultApi = {
   },
 
   /**
-   * `encryption`, when supplied, is the client-generated zero-knowledge
-   * envelope (wrapped DEK + KDF params) for a new encrypted vault — see
-   * `lib/crypto/vault-keys.ts`. Omit it to create a legacy plaintext
-   * vault, unchanged from before this checkpoint.
+   * `encryption` is the client-generated zero-knowledge envelope (wrapped
+   * DEK + KDF params) for the new vault — see `lib/crypto/vault-keys.ts`.
+   * Required as of Phase 1: the server rejects vault creation without it,
+   * so every new vault is encrypted.
    */
   create(
     name: string,
     token: string,
-    encryption?: VaultEncryptionEnvelope
+    encryption: VaultEncryptionEnvelope
   ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>("/vaults", {
       method: "POST",

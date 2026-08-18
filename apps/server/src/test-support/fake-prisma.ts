@@ -76,6 +76,14 @@ export interface FakeUserRow {
 
 type CreateUserData = Omit<FakeUserRow, "id" | "createdAt" | "updatedAt">;
 
+/** Mirrors the real `VaultService.createVault` call: `ownerId`/`name` are
+ * always given, every other column (encryption envelope fields) is only
+ * spread in conditionally for an encrypted vault, so all of them must stay
+ * optional here rather than following the plain `Omit<...>` pattern used
+ * for file/folder, which always provides every non-id/timestamp field. */
+type CreateVaultData = Pick<FakeVaultRow, "ownerId" | "name"> &
+  Partial<Omit<FakeVaultRow, "id" | "ownerId" | "name" | "createdAt" | "updatedAt">>;
+
 export interface FakeFolderRow {
   id: string;
   name: string | null;
@@ -217,6 +225,25 @@ export function createFakePrisma(
               vault.ownerId === where.ownerId && vault.wrappedDekCiphertext !== null
           )
           .map((vault) => ({ id: vault.id }));
+      },
+      async create({ data }: { data: CreateVaultData }) {
+        const nowCreated = new Date();
+        const row: FakeVaultRow = {
+          id: randomUUID(),
+          createdAt: nowCreated,
+          updatedAt: nowCreated,
+          encryptionVersion: null,
+          kekSalt: null,
+          kekIterations: null,
+          kekHash: null,
+          wrappedDekCiphertext: null,
+          wrappedDekIv: null,
+          recoveryWrappedDekCiphertext: null,
+          recoveryWrappedDekIv: null,
+          ...data
+        };
+        vaults.push(row);
+        return row;
       },
       async update({
         where,
