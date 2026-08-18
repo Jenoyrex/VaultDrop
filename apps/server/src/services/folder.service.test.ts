@@ -97,3 +97,114 @@ describe("FolderService.updateFolder — P2002 race handling", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "CONFLICT" });
   });
 });
+
+describe("FolderService.updateFolder — cycle prevention", () => {
+  it("rejects moving a folder under itself", async () => {
+    const { folderService } = setup();
+    const a = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "A"
+    });
+
+    await expect(
+      folderService.updateFolder(a.id, OWNER_ID, { parentId: a.id })
+    ).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
+  });
+
+  it("rejects moving a folder under its direct child (A contains B; move A under B)", async () => {
+    const { folderService, folders } = setup();
+    const a = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "A"
+    });
+    const b = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: a.id,
+      name: "B"
+    });
+
+    const snapshotBefore = JSON.parse(JSON.stringify(folders));
+
+    await expect(
+      folderService.updateFolder(a.id, OWNER_ID, { parentId: b.id })
+    ).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
+
+    // Database state remains unchanged — the rejection happens before any
+    // write, not as a rollback after one.
+    expect(JSON.parse(JSON.stringify(folders))).toEqual(snapshotBefore);
+  });
+
+  it("rejects moving a folder under a deeper descendant (A > B > C; move A under C)", async () => {
+    const { folderService, folders } = setup();
+    const a = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "A"
+    });
+    const b = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: a.id,
+      name: "B"
+    });
+    const c = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: b.id,
+      name: "C"
+    });
+
+    const snapshotBefore = JSON.parse(JSON.stringify(folders));
+
+    await expect(
+      folderService.updateFolder(a.id, OWNER_ID, { parentId: c.id })
+    ).rejects.toMatchObject({ statusCode: 400, code: "BAD_REQUEST" });
+
+    expect(JSON.parse(JSON.stringify(folders))).toEqual(snapshotBefore);
+  });
+
+  it("still allows moving a folder to an unrelated existing folder in the same vault", async () => {
+    const { folderService } = setup();
+    const a = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "A"
+    });
+    const shelf = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "Shelf"
+    });
+
+    const moved = await folderService.updateFolder(a.id, OWNER_ID, {
+      parentId: shelf.id
+    });
+
+    expect(moved.parentId).toBe(shelf.id);
+  });
+
+  it("does not hang or overflow the stack when searchContents traverses an already-cyclic chain (defense-in-depth)", async () => {
+    // Simulates malformed/legacy data that predates the cycle check —
+    // written directly to the fake store rather than through
+    // updateFolder, which now refuses to create this state itself.
+    const { folderService, folders } = setup();
+    const a = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: null,
+      name: "A"
+    });
+    const b = await folderService.createFolder(OWNER_ID, {
+      vaultId: VAULT_ID,
+      parentId: a.id,
+      name: "B"
+    });
+    const aRow = folders.find((f) => f.id === a.id)!;
+    aRow.parentId = b.id; // hand-crafted cycle: A -> B -> A
+
+    const results = await folderService.searchContents(VAULT_ID, OWNER_ID, null, a.id);
+
+    // Terminates (this line is reached at all) instead of stack-overflowing;
+    // the exact contents don't matter as much as returning at all.
+    expect(results).toBeDefined();
+  });
+});

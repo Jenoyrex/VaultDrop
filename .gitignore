@@ -7,3 +7,4 @@ dist
 .env.local
 apps/server/storage
 .DS_Store
+*.tsbuildinfo

@@ -7,6 +7,14 @@ on:
   push:
     branches: [main]
 
+# Least-privilege default for the whole workflow: this pipeline only reads
+# the repo, installs dependencies, and runs typecheck/test/build — it never
+# needs to write to the repo, open PRs, or touch any other GitHub API
+# surface. Individual jobs/steps may still narrow this further, but nothing
+# here should ever need broader than read access.
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Typecheck, test, and build

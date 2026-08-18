@@ -14,7 +14,8 @@ export function signAccessToken(input: SignAccessTokenInput): string {
     username: input.username
   };
   return jwt.sign(payload, input.secret, {
-    expiresIn: input.expiresIn as jwt.SignOptions["expiresIn"]
+    expiresIn: input.expiresIn as jwt.SignOptions["expiresIn"],
+    algorithm: "HS256"
   });
 }
 
@@ -27,7 +28,14 @@ export class InvalidTokenError extends Error {
 
 export function verifyAccessToken(token: string, secret: string): AccessTokenPayload {
   try {
-    const decoded = jwt.verify(token, secret);
+    // Explicit allow-list rather than relying on jsonwebtoken's own
+    // default inference (which — for a string secret — already restricts
+    // to the HS256/384/512 family, so this doesn't change today's actual
+    // behavior). Being explicit here means that guarantee no longer
+    // depends on library-default behavior/version, and it's the only
+    // algorithm this app's tokens are ever signed with (see
+    // `signAccessToken` above).
+    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
     if (typeof decoded === "string") {
       throw new InvalidTokenError();
     }
