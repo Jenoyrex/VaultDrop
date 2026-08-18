@@ -187,3 +187,75 @@ describe("POST /vaults", () => {
     expect(vaults).toHaveLength(0);
   });
 });
+
+// Cross-user authorization (IDOR) regression tests: User A creates a vault,
+// User B (a separate, otherwise-valid, authenticated account) attempts to
+// read or delete it. The service layer already scopes every lookup to
+// `ownerId` (see `VaultService.getOwnedVaultOrThrow`); these tests exercise
+// that boundary through the actual HTTP routes so a future regression here
+// is caught by CI rather than by inspection.
+describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
+  function setupTwoUsersAndAVault() {
+    const userA = randomUUID();
+    const userB = randomUUID();
+    const vaultId = randomUUID();
+    const { prisma, vaults } = createFakePrisma([
+      { id: vaultId, ownerId: userA, name: "User A's Vault", ...VALID_ENCRYPTION }
+    ]);
+    const app = createApp(prisma, TEST_ENV, unusedStorage);
+    return {
+      vaultId,
+      vaults,
+      app,
+      tokenA: bearerTokenFor(userA),
+      tokenB: bearerTokenFor(userB)
+    };
+  }
+
+  it("GET /vaults/:vaultId: User B is forbidden from reading User A's vault", async () => {
+    const { app, vaultId, tokenB } = setupTwoUsersAndAVault();
+
+    const res = await request(app)
+      .get(`/vaults/${vaultId}`)
+      .set("Authorization", `Bearer ${tokenB}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("GET /vaults/:vaultId: the same vault is readable by its real owner (control case)", async () => {
+    const { app, vaultId, tokenA } = setupTwoUsersAndAVault();
+
+    const res = await request(app)
+      .get(`/vaults/${vaultId}`)
+      .set("Authorization", `Bearer ${tokenA}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.vault.id).toBe(vaultId);
+  });
+
+  it("DELETE /vaults/:vaultId: User B is forbidden from deleting User A's vault, and the vault is not removed", async () => {
+    const { app, vaultId, tokenB, vaults } = setupTwoUsersAndAVault();
+
+    const res = await request(app)
+      .delete(`/vaults/${vaultId}`)
+      .set("Authorization", `Bearer ${tokenB}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+
+    // No mutation: User A's vault is still exactly there afterward.
+    expect(vaults).toHaveLength(1);
+    expect(vaults[0]?.id).toBe(vaultId);
+  });
+
+  it("GET /vaults/:vaultId: a nonexistent vault id is 404, not 403, for any authenticated user", async () => {
+    const { app, tokenB } = setupTwoUsersAndAVault();
+
+    const res = await request(app)
+      .get(`/vaults/${randomUUID()}`)
+      .set("Authorization", `Bearer ${tokenB}`);
+
+    expect(res.status).toBe(404);
+  });
+});

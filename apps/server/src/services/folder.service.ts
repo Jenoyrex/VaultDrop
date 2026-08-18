@@ -88,6 +88,49 @@ export class FolderService {
     }
   }
 
+  /**
+   * True if giving `folderId` a new parent of `newParentId` would create a
+   * cycle — i.e. `newParentId` is `folderId` itself, or lives anywhere in
+   * `folderId`'s current subtree (a descendant). Detected by walking
+   * `newParentId`'s own ancestor chain upward: if `folderId` appears in
+   * it, `newParentId` is currently only reachable *through* `folderId`, so
+   * making `folderId` a child of `newParentId` would close a loop
+   * (`folderId` -> ... -> `newParentId` -> ... -> `folderId`).
+   *
+   * A visited-set bounds the walk so that even an already-corrupted
+   * cyclic chain (from data that predates this check, or reached some
+   * other way) can't hang this method — it fails closed (returns `false`,
+   * i.e. "no cycle detected via this walk") rather than looping forever.
+   * This is the server-side authority that stops a cycle from ever being
+   * written in the first place; `FolderService.searchContents`'s
+   * `collectDescendants` carries its own, independent visited-set guard
+   * as defense-in-depth in case a cyclic chain ever exists regardless.
+   */
+  private async wouldCreateCycle(folderId: string, newParentId: string): Promise<boolean> {
+    const visited = new Set<string>();
+    let currentId: string | null = newParentId;
+
+    while (currentId !== null) {
+      if (currentId === folderId) {
+        return true;
+      }
+      if (visited.has(currentId)) {
+        return false;
+      }
+      visited.add(currentId);
+
+      const current: Folder | null = await this.prisma.folder.findUnique({
+        where: { id: currentId }
+      });
+      if (!current) {
+        return false;
+      }
+      currentId = current.parentId;
+    }
+
+    return false;
+  }
+
   async createFolder(
     ownerId: string,
     input: CreateFolderInput
@@ -233,6 +276,11 @@ export class FolderService {
         throw AppError.badRequest("A folder cannot be its own parent");
       }
       await this.assertParentBelongsToVault(input.parentId, folder.vaultId);
+      if (await this.wouldCreateCycle(folderId, input.parentId)) {
+        throw AppError.badRequest(
+          "A folder cannot be moved into one of its own subfolders"
+        );
+      }
     }
 
     try {
@@ -312,9 +360,21 @@ export class FolderService {
     // root folder are also considered "in scope".
     const subtreeFolderIds = new Set<string>();
 
+    // Defense-in-depth against a cyclic parentId chain: `wouldCreateCycle`
+    // in `updateFolder` is what actually stops a cycle from ever being
+    // written, but this guard means that even if a cyclic chain somehow
+    // exists anyway (data predating that check, a direct DB edit, etc.),
+    // recursion here still terminates instead of recursing until the call
+    // stack overflows — each folder id is only ever descended into once.
+    const visitedForDescendants = new Set<string>();
+
     const collectDescendants = (parentId: string | null): void => {
       const children = childrenByParent.get(parentId) ?? [];
       for (const child of children) {
+        if (visitedForDescendants.has(child.id)) {
+          continue;
+        }
+        visitedForDescendants.add(child.id);
         subtreeFolderIds.add(child.id);
         collectDescendants(child.id);
       }
@@ -327,8 +387,14 @@ export class FolderService {
 
     const pathOf = (folderId: string | null): PathSegment[] => {
       const segments: PathSegment[] = [];
+      // Same cyclic-chain defense as `collectDescendants` above, applied
+      // to the ancestor direction: without it, a cyclic parentId chain
+      // would make this `while` loop run forever instead of throwing a
+      // catchable error.
+      const visitedForPath = new Set<string>();
       let current = folderId ? folderById.get(folderId) ?? null : null;
-      while (current) {
+      while (current && !visitedForPath.has(current.id)) {
+        visitedForPath.add(current.id);
         segments.unshift({
           id: current.id,
           name: current.name,

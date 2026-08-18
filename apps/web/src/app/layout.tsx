@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: "Your Files. Your Password. Your Vault."
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Reading `headers()` forces this layout — and therefore every page
   // under it — to render dynamically per-request instead of being
   // statically optimized at build time. This is required for the
@@ -21,7 +21,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // rendering — confirmed here by reproducing the failure (a hydration
   // error on the two previously-static routes, `/` and `/auth`) before
   // adding this line, not assumed in advance.
-  headers();
+  //
+  // `headers()` became an async Dynamic API in Next.js 15 (returns a
+  // Promise instead of the value directly) — this `await` is required for
+  // that reason, not a stylistic change; the return value is still
+  // discarded, only its side effect (opting this layout into dynamic
+  // rendering) is wanted.
+  await headers();
 
   return (
     <html lang="en">
