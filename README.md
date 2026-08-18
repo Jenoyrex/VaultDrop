@@ -20,7 +20,40 @@ It's a monorepo with a Next.js frontend, an Express/Prisma API, PostgreSQL for m
 
 ### Screenshots
 
-Screenshots coming soon.
+<table>
+<tr>
+<td width="50%">
+
+**Vault access**
+![Find your vault — username entry screen](./screenshots/vault-access.png)
+Enter your username to locate your vault before authenticating.
+
+</td>
+<td width="50%">
+
+**Dashboard**
+![VaultDrop dashboard listing a user's vaults](./screenshots/dashboard.png)
+Overview of all vaults belonging to the signed-in user, with quick access to create a new one.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Vault / folder view**
+![Vault view showing a folder inside a vault](./screenshots/vault-folders.png)
+Browsing a vault's contents, including folder navigation and vault management actions.
+
+</td>
+<td width="50%">
+
+**Vault / file view**
+![Vault view showing encrypted files inside a folder](./screenshots/vault-files.png)
+Encrypted files within a folder, each shown with size, timestamp, and download/edit/delete actions.
+
+</td>
+</tr>
+</table>
 
 ---
 
