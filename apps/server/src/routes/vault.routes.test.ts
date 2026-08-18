@@ -52,8 +52,17 @@ function bearerTokenFor(ownerId: string): string {
   });
 }
 
+const VALID_ENCRYPTION = {
+  encryptionVersion: 1,
+  kekSalt: "kek-salt",
+  kekIterations: 600_000,
+  kekHash: "SHA-256",
+  wrappedDekCiphertext: "wrapped-dek-ciphertext",
+  wrappedDekIv: "wrapped-dek-iv"
+};
+
 describe("POST /vaults", () => {
-  it("creates a legacy (unencrypted) vault owned by the authenticated user", async () => {
+  it("rejects a request with no encryption envelope at all, and creates nothing (plaintext vaults can no longer be created)", async () => {
     const ownerId = randomUUID();
     const { prisma, vaults } = createFakePrisma();
     const app = createApp(prisma, TEST_ENV, unusedStorage);
@@ -64,21 +73,71 @@ describe("POST /vaults", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ name: "My Vault" });
 
-    expect(res.status).toBe(201);
-    expect(res.body.vault.name).toBe("My Vault");
-    expect(res.body.vault.ownerId).toBe(ownerId);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(vaults).toHaveLength(0);
+  });
 
-    // Asserts against the fake Prisma store's own row, not just the HTTP
-    // response — proving the request actually went through
-    // createVaultRouter -> VaultService.createVault -> prisma.vault.create,
-    // not merely that the route returned a plausible-looking body.
-    expect(vaults).toHaveLength(1);
-    expect(vaults[0]).toMatchObject({
-      id: res.body.vault.id,
-      ownerId,
-      name: "My Vault",
-      wrappedDekCiphertext: null
-    });
+  it("rejects a malformed/incomplete encryption envelope (missing fields), and creates nothing", async () => {
+    const ownerId = randomUUID();
+    const { prisma, vaults } = createFakePrisma();
+    const app = createApp(prisma, TEST_ENV, unusedStorage);
+    const token = bearerTokenFor(ownerId);
+
+    const res = await request(app)
+      .post("/vaults")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "My Vault",
+        encryption: {
+          encryptionVersion: 1,
+          kekSalt: "kek-salt"
+          // kekIterations, kekHash, wrappedDekCiphertext, wrappedDekIv omitted
+        }
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(vaults).toHaveLength(0);
+  });
+
+  it("rejects an encryption envelope with wrong-typed/empty fields, and creates nothing", async () => {
+    const ownerId = randomUUID();
+    const { prisma, vaults } = createFakePrisma();
+    const app = createApp(prisma, TEST_ENV, unusedStorage);
+    const token = bearerTokenFor(ownerId);
+
+    const res = await request(app)
+      .post("/vaults")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        name: "My Vault",
+        encryption: {
+          ...VALID_ENCRYPTION,
+          kekSalt: "", // fails min(1)
+          kekIterations: -5 // fails positive-int
+        }
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(vaults).toHaveLength(0);
+  });
+
+  it("an authenticated user cannot create a plaintext vault even by explicitly sending encryption: null", async () => {
+    const ownerId = randomUUID();
+    const { prisma, vaults } = createFakePrisma();
+    const app = createApp(prisma, TEST_ENV, unusedStorage);
+    const token = bearerTokenFor(ownerId);
+
+    const res = await request(app)
+      .post("/vaults")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "My Vault", encryption: null });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(vaults).toHaveLength(0);
   });
 
   it("creates an encrypted vault, persisting the full encryption envelope", async () => {

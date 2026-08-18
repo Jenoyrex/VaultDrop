@@ -33,22 +33,18 @@ export class VaultService {
   async createVault(
     ownerId: string,
     name: string,
-    encryption?: VaultEncryptionEnvelope
+    encryption: VaultEncryptionEnvelope
   ): Promise<VaultDTO> {
     const vault = await this.prisma.vault.create({
       data: {
         name,
         ownerId,
-        ...(encryption
-          ? {
-              encryptionVersion: encryption.encryptionVersion,
-              kekSalt: encryption.kekSalt,
-              kekIterations: encryption.kekIterations,
-              kekHash: encryption.kekHash,
-              wrappedDekCiphertext: encryption.wrappedDekCiphertext,
-              wrappedDekIv: encryption.wrappedDekIv
-            }
-          : {})
+        encryptionVersion: encryption.encryptionVersion,
+        kekSalt: encryption.kekSalt,
+        kekIterations: encryption.kekIterations,
+        kekHash: encryption.kekHash,
+        wrappedDekCiphertext: encryption.wrappedDekCiphertext,
+        wrappedDekIv: encryption.wrappedDekIv
       }
     });
     return toVaultDTO(vault);
