@@ -5,12 +5,16 @@ const API_ORIGIN = "https://api.example.com";
 
 describe("buildCsp", () => {
   describe("production", () => {
-    it("uses a nonce-based script-src with no unsafe-inline/unsafe-eval anywhere", () => {
+    it("uses a nonce-based script-src with no unsafe-inline/unsafe-eval in script-src or style-src", () => {
       const csp = buildCsp({ apiOrigin: API_ORIGIN, nonce: "abc123", isProduction: true });
 
       expect(csp).toContain(`script-src 'self' 'nonce-abc123'`);
-      expect(csp).not.toContain("unsafe-inline");
       expect(csp).not.toContain("unsafe-eval");
+      // 'unsafe-inline' is intentionally present, but ONLY on the narrow
+      // style-src-attr directive (see the style-src-attr test below) —
+      // never on script-src or on style-src itself.
+      expect(csp).not.toContain(`script-src 'self' 'nonce-abc123' 'unsafe-inline'`);
+      expect(csp).not.toContain(`style-src 'self' 'unsafe-inline'`);
     });
 
     it("throws if no nonce is provided", () => {
@@ -41,6 +45,15 @@ describe("buildCsp", () => {
   });
 
   describe("directives common to both environments", () => {
+    it("allows inline style ATTRIBUTES (style-src-attr) without loosening style-src itself", () => {
+      const csp = buildCsp({ apiOrigin: API_ORIGIN, nonce: "n", isProduction: true });
+      expect(csp).toContain(`style-src 'self'`);
+      expect(csp).toContain(`style-src-attr 'unsafe-inline'`);
+      // style-src itself (governing <style> elements/stylesheets) must
+      // never carry unsafe-inline — only the narrower attr directive does.
+      expect(/style-src 'self';/.test(csp)).toBe(true);
+    });
+
     it("scopes connect-src to exactly the configured API origin, plus self", () => {
       const csp = buildCsp({ apiOrigin: API_ORIGIN, nonce: "n", isProduction: true });
       expect(csp).toContain(`connect-src 'self' ${API_ORIGIN}`);

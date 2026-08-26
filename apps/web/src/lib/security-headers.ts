@@ -19,6 +19,18 @@
  *    app in an iframe; there's no legitimate embedding use case.
  *  - No `unsafe-inline`/`unsafe-eval` in production `script-src` — a
  *    nonce is required instead, threaded through by `middleware.ts`.
+ *  - `style-src-attr 'unsafe-inline'` is declared separately from
+ *    `style-src` (which stays `'self'`, no nonce/hash, no unsafe-inline).
+ *    Radix UI and Framer Motion — both used by this app's components —
+ *    apply positioning/animation styles as inline `style="..."` HTML
+ *    attributes at runtime, which CSP3 governs via `style-src-attr`
+ *    independently of `style-src` (which only covers `<style>` elements/
+ *    stylesheets, and is what would matter for actual CSS injection). A
+ *    `style="..."` attribute alone cannot execute script, unlike
+ *    `script-src 'unsafe-inline'`, so this is the narrow, standard
+ *    accommodation for that class of UI library — not a general loosening
+ *    of the policy. Without it, real inline-style CSP violations were
+ *    observed in the browser console in production.
  *  - Deliberately no `upgrade-insecure-requests`: verified against the
  *    real app that this directive breaks every API call when
  *    `NEXT_PUBLIC_API_URL` points at a plain-HTTP origin (e.g. local/
@@ -62,6 +74,7 @@ export function buildCsp({ apiOrigin, nonce, isProduction }: BuildCspOptions): s
     `default-src 'self'`,
     `script-src ${scriptSrc}`,
     `style-src 'self'`,
+    `style-src-attr 'unsafe-inline'`,
     `img-src 'self' blob:`,
     `font-src 'self'`,
     `connect-src 'self' ${apiOrigin}`,
