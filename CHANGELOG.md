@@ -2,8 +2,14 @@
 
 Chronological build log across both sprints completed so far. Newest
 entries at the top. This is a build log, not a semantic-versioned release
-changelog — VaultDrop has not tagged a formal release yet. (See
-`PROJECT_STATE.md` for the version-numbering note.)
+changelog — VaultDrop has not tagged a formal release yet.
+
+> **Note:** earlier entries below reference `HANDOFF.md`, `PROJECT_STATE.md`,
+> `PROJECT_TREE.md`, `NEXT_STEPS.md`, and `NEW_CHAT_CONTINUATION_PROMPT.md` —
+> internal sprint-handoff working documents used during development. They
+> have since been removed as part of preparing this repository for public
+> release; this changelog is kept as the durable historical record in their
+> place.
 
 ---
 

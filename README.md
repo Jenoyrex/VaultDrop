@@ -263,7 +263,7 @@ CI (GitHub Actions) runs typecheck, test, and build on every pull request and ev
 - **Rate limiting:** separate budgets for auth endpoints and general API/upload/download traffic, keyed per-user where authenticated
 - **Anti-enumeration:** login returns a generic error for both "wrong password" and "no such user"
 
-A Phase 1 security review of the encryption and authentication design found no confirmed critical or high-severity exploitable issues, reflecting the review performed to date rather than an ongoing third-party audit.
+See [`SECURITY.md`](./SECURITY.md) for the vulnerability reporting process and current known limitations, and [`docs/SECURITY_REVIEW.md`](./docs/SECURITY_REVIEW.md) for a maintainer-performed review of the encryption, authentication, and authorization design, cross-checked against the automated test suite. This reflects the review performed to date, not an independent third-party audit.
 
 ---
 
@@ -307,4 +307,4 @@ The following are planned, not yet implemented:
 
 ## License
 
-No license has been chosen for this project yet. All rights reserved until a license is added.
+All rights reserved — see [`LICENSE`](./LICENSE). This repository is shared for portfolio/evaluation purposes; no license to use, copy, modify, or distribute the code is granted.
