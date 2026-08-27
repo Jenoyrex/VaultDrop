@@ -3,9 +3,21 @@ import { headers } from "next/headers";
 import { AppProviders } from "@/components/providers/app-providers";
 import "./globals.css";
 
+// Google Search Console's "HTML tag" ownership-verification method: set
+// GOOGLE_SITE_VERIFICATION (the token Search Console generates for that
+// method, not the whole <meta> tag) in the deployment environment and
+// Next renders the required <meta name="google-site-verification"
+// content="..."> tag automatically. Left out of the page entirely — not
+// rendered as an empty/placeholder tag — whenever the env var is unset,
+// which is also what keeps every existing test/build unaffected today.
+const googleSiteVerification = process.env.GOOGLE_SITE_VERIFICATION;
+
 export const metadata: Metadata = {
   title: "VaultDrop",
-  description: "Your Files. Your Password. Your Vault."
+  description: "Your Files. Your Password. Your Vault.",
+  ...(googleSiteVerification
+    ? { verification: { google: googleSiteVerification } }
+    : {})
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
