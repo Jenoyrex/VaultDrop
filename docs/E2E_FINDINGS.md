@@ -8,7 +8,7 @@
 
 ## Summary
 
-An earlier E2E pass (driven through claude-in-chrome / CDP browser automation)
+An earlier E2E pass (driven through CDP browser automation)
 observed a `503` error on encrypted file upload. Manual verification was
 performed in a normal, non-automated Chrome window to determine whether this
 was a real application defect.
@@ -16,9 +16,9 @@ was a real application defect.
 ## Result
 
 - Encrypted file upload works normally in a standard Chrome window.
-- The `503` did **not** reproduce outside of claude-in-chrome/CDP-driven
+- The `503` did **not** reproduce outside of CDP-driven
   automation.
-- Conclusion: the prior `503` is attributed to the claude-in-chrome /
+- Conclusion: the prior `503` is attributed to the automated
   browser-instrumentation environment (e.g. CDP interference with the
   encryption/upload flow), not to VaultDrop's application code.
 
@@ -29,7 +29,7 @@ was a real application defect.
 - No application code was modified as a result of this investigation.
 - No upload fallback was implemented.
 - This should be treated as an automation/tooling caveat for future E2E runs
-  via claude-in-chrome, not as a confirmed product bug — revisit only if
+  via CDP browser automation, not as a confirmed product bug — revisit only if
   further evidence (e.g. reproduction outside automation, server logs showing
   a genuine 503) surfaces.
 
