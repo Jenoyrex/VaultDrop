@@ -10,6 +10,18 @@ Deployed and usable end-to-end today: create an account, create an encrypted vau
 
 <sub>API: [vaultdrop-api-jzrc.onrender.com](https://vaultdrop-api-jzrc.onrender.com) · Repository: [github.com/Jenoyrex/VaultDrop](https://github.com/Jenoyrex/VaultDrop)</sub>
 
+## At a glance
+
+- **What it is:** a file vault where file contents and file/folder names are encrypted in the browser before upload.
+- **Why it exists:** in typical cloud storage the provider holds the encryption keys. Here the server stores only ciphertext and wrapped (encrypted) keys. Some metadata is visible to the server by design; see [Privacy Model](#why-vaultdrop--privacy-model).
+- **Key technical decisions:**
+  - Envelope encryption with the Web Crypto API: a PBKDF2-derived key wraps a per-vault key, which wraps a per-file key.
+  - Files are encrypted in chunks with AES-256-GCM; truncated ciphertext is rejected on decryption.
+  - A recovery key, shown once, wraps a second copy of the vault key.
+  - The vault-creation API rejects any request without a complete encryption envelope.
+  - Argon2id for account password hashing; rate limiting and a nonce-based Content-Security-Policy.
+- **Try it:** the [live demo](https://vaultdrop95.netlify.app), or run it locally via [Local Development](#local-development--getting-started).
+
 ---
 
 ## Overview
