@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Jenoyrex/VaultDrop/actions/workflows/ci.yml/badge.svg)](https://github.com/Jenoyrex/VaultDrop/actions/workflows/ci.yml)
 
-A private file vault with client-side encryption — your password never leaves your browser, and the server never sees the keys that protect your files.
+A private file vault with client-side encryption — files are encrypted in your browser before upload, and the server stores only ciphertext and wrapped (encrypted) keys.
 
 ### 🔗 [Live Demo →](https://vaultdrop95.netlify.app)
 
@@ -71,7 +71,9 @@ Encrypted files within a folder, each shown with size, timestamp, and download/e
 
 ## Why VaultDrop / Privacy Model
 
-Most "secure" file storage products encrypt data at rest on the server — which means the provider still holds the keys and could, in principle, read your files. VaultDrop's encryption model is different: keys are derived and used entirely client-side, so the server is never in possession of anything it could use to decrypt file contents or file/folder names.
+Most "secure" file storage products encrypt data at rest on the server — which means the provider still holds the keys and could, in principle, read your files. VaultDrop's encryption model is different: encryption keys are derived and used client-side, and the server stores only ciphertext and wrapped keys — never a usable key, and never your password (only an Argon2id hash of it).
+
+**Password handling:** the same account password is used to log in and to derive vault keys in the browser. The server receives it over HTTPS during sign-up, login, and password change to verify or hash it with Argon2id; it does not store the password and never uses it to derive or unwrap keys. This protects file contents if stored data (database or object storage) is exposed, but not against a compromised server that captures passwords as they arrive at login.
 
 **Protected (never leaves the browser in usable form):** file contents, file and folder names, and every encryption key involved.
 
@@ -96,7 +98,7 @@ Encryption is **mandatory for every new vault** — the vault-creation API rejec
 
 ## How the Encryption Flow Works
 
-1. **Vault creation** — The browser generates a random vault Data Encryption Key (DEK). Your password is run through PBKDF2-SHA256 to derive a Key-Encryption-Key (KEK), which wraps (encrypts) the DEK with AES-256-GCM. A recovery key is also generated and used to wrap a second copy of the DEK. The server receives and stores only the wrapped (encrypted) DEK, the KEK's salt/iteration parameters, and the recovery-wrapped DEK — never the password, the KEK, the DEK, or the recovery key itself.
+1. **Vault creation** — The browser generates a random vault Data Encryption Key (DEK). Your password is run through PBKDF2-SHA256 to derive a Key-Encryption-Key (KEK), which wraps (encrypts) the DEK with AES-256-GCM. A recovery key is also generated and used to wrap a second copy of the DEK. The vault-creation request contains only the wrapped (encrypted) DEK, the KEK's salt/iteration parameters, and the recovery-wrapped DEK — never the KEK, the DEK, or the recovery key itself. (The password is not part of this request; it reaches the server only during authentication, as described in [Privacy Model](#why-vaultdrop--privacy-model).)
 2. **Unlocking a vault** — Your password is re-derived into the same KEK (using the stored salt/iterations) and used to unwrap the stored DEK, entirely in-browser.
 3. **Uploading a file** — The browser generates a random per-file content key, encrypts the file (in chunks, via AES-256-GCM) with it, and wraps that file key with the vault DEK. The server receives only ciphertext plus the wrapped file key — it cannot decrypt either.
 4. **File and folder names** — Encrypted directly with the vault DEK before being sent to the server; the server stores only the ciphertext.
@@ -134,7 +136,7 @@ flowchart LR
     API -->|"ciphertext (ID/S3 API)"| Storage
 ```
 
-The frontend (Netlify) and API (Render) are deployed independently and communicate over HTTPS. The API is the only component with credentials for PostgreSQL (Neon) and Backblaze B2; it never has access to a user's password or any derived encryption key.
+The frontend (Netlify) and API (Render) are deployed independently and communicate over HTTPS. The API is the only component with credentials for PostgreSQL (Neon) and Backblaze B2; it receives a user's password only transiently during authentication (stored only as an Argon2id hash), and never stores or receives any derived encryption key in usable form.
 
 ---
 
