@@ -112,8 +112,8 @@ pnpm --filter @vaultdrop/web build          # FAILED once (Slot bug above), clea
 ### Documentation checkpoint (this entry)
 - Regenerated `HANDOFF.md`, `PROJECT_TREE.md`, `CHANGELOG.md` (this file),
   `PROJECT_STATE.md`, `NEXT_STEPS.md`.
-- Added `NEW_CHAT_CONTINUATION_PROMPT.md` — a self-contained prompt for
-  starting a brand-new Claude session on this project.
+- Added `NEW_CHAT_CONTINUATION_PROMPT.md` — a self-contained summary for
+  resuming work on this project.
 - No source code was touched in this checkpoint — documentation only, as
   instructed.
 
