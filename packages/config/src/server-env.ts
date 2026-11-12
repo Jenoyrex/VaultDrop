@@ -34,7 +34,10 @@ const serverEnvSchema = z
     JWT_EXPIRES_IN: z.string().default("15m"),
     STORAGE_DRIVER: z.enum(["local", "cloud"]).default("local"),
     STORAGE_ROOT: z.string().default("./storage"),
-    CORS_ORIGIN: z.string().default("http://localhost:3000"),
+    /** The single web origin allowed to make credentialed requests. Must be
+     * a real URL — a wildcard ("*") is rejected here because the API uses
+     * cookie credentials and also checks Origin against this value. */
+    CORS_ORIGIN: z.string().url().default("http://localhost:3000"),
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
     /** Sliding window for auth-route rate limiting, in ms. Optional — the
      * rate limiter falls back to its own built-in default when unset, so

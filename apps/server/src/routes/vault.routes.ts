@@ -15,7 +15,7 @@ export function createVaultRouter(
 ): Router {
   const router = Router();
   const vaultService = new VaultService(prisma);
-  const requireAuth = createAuthMiddleware(env);
+  const requireAuth = createAuthMiddleware(env, prisma);
 
   const encryptionEnvelopeSchema = z.object({
     encryptionVersion: z.number().int().positive(),

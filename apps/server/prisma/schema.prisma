@@ -12,6 +12,10 @@ model User {
   id           String   @id @default(uuid())
   username     String   @unique
   passwordHash String
+  /// Copied into every session token's `ver` claim and compared on each
+  /// authenticated request. Incrementing it (logout, password change)
+  /// revokes every token issued before the increment.
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   vaults       Vault[]

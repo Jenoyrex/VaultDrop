@@ -3,7 +3,13 @@ import { Router } from "express";
 import type { PrismaClient } from "@prisma/client";
 import type { ServerEnv } from "@vaultdrop/config";
 import { asyncHandler } from "../utils/async-handler.js";
-import { createAuthMiddleware } from "../middleware/auth.js";
+import {
+  clearSessionCookie,
+  createAuthMiddleware,
+  readSessionCookie,
+  setSessionCookie
+} from "../middleware/auth.js";
+import { verifyAccessToken } from "@vaultdrop/crypto";
 import { AppError } from "../utils/app-error.js";
 import { AuthService } from "../services/auth.service.js";
 import { changePasswordSchema, loginSchema, registerSchema } from "./auth.schemas.js";
@@ -12,7 +18,7 @@ import { createAuthRateLimiters } from "../middleware/rate-limit.js";
 export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
   const router = Router();
   const authService = new AuthService(prisma, env);
-  const requireAuth = createAuthMiddleware(env);
+  const requireAuth = createAuthMiddleware(env, prisma);
   const usernameQuerySchema = z.object({ username: z.string().min(1).max(32) });
   const { credentialLimiter, enumerationLimiter } = createAuthRateLimiters(env);
 
@@ -21,8 +27,9 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
     credentialLimiter,
     asyncHandler(async (req, res) => {
       const body = registerSchema.parse(req.body);
-      const result = await authService.register(body.username, body.password);
-      res.status(201).json(result);
+      const { user, token } = await authService.register(body.username, body.password);
+      setSessionCookie(res, env, token);
+      res.status(201).json({ user });
     })
   );
 
@@ -41,18 +48,34 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
     credentialLimiter,
     asyncHandler(async (req, res) => {
       const body = loginSchema.parse(req.body);
-      const result = await authService.login(body.username, body.password);
-      res.status(200).json(result);
+      const { user, token } = await authService.login(body.username, body.password);
+      setSessionCookie(res, env, token);
+      res.status(200).json({ user });
     })
   );
 
-  // JWTs are stateless, so logout is a client-side token discard. The server
-  // still exposes this endpoint so the web app has a single, consistent
-  // call site and so a future token-blocklist can slot in without changing
-  // the client contract.
-  router.post("/logout", requireAuth, (_req, res) => {
-    res.status(204).send();
-  });
+  // Deliberately not behind requireAuth: logout must always clear the
+  // cookie, even when the token in it is already expired or revoked. When
+  // the token is still valid, bumping tokenVersion revokes it (and every
+  // other token for this user) server-side, so a copy captured earlier
+  // stops working too.
+  router.post(
+    "/logout",
+    asyncHandler(async (req, res) => {
+      const token = readSessionCookie(req, env);
+      let userId: string | undefined;
+      try {
+        userId = token ? verifyAccessToken(token, env.JWT_SECRET).sub : undefined;
+      } catch {
+        // Invalid/expired token: nothing to revoke, just clear the cookie.
+      }
+      if (userId) {
+        await authService.revokeAllSessions(userId);
+      }
+      clearSessionCookie(res, env);
+      res.status(204).send();
+    })
+  );
 
   router.get(
     "/me",
@@ -81,12 +104,15 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
         throw AppError.unauthorized();
       }
       const body = changePasswordSchema.parse(req.body);
-      await authService.changePassword(
+      const token = await authService.changePassword(
         req.user.sub,
         body.currentPassword,
         body.newPassword,
         body.vaults
       );
+      // All other sessions were revoked by the password change; keep this
+      // device signed in with a token at the new version.
+      setSessionCookie(res, env, token);
       res.status(204).send();
     })
   );

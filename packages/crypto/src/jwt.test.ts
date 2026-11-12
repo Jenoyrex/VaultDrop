@@ -9,6 +9,7 @@ describe("signAccessToken / verifyAccessToken", () => {
     const token = signAccessToken({
       userId: "user-1",
       username: "alice",
+      tokenVersion: 3,
       secret: SECRET,
       expiresIn: "15m"
     });
@@ -17,6 +18,7 @@ describe("signAccessToken / verifyAccessToken", () => {
 
     expect(payload.sub).toBe("user-1");
     expect(payload.username).toBe("alice");
+    expect(payload.ver).toBe(3);
     expect(typeof payload.iat).toBe("number");
     expect(typeof payload.exp).toBe("number");
   });
@@ -25,6 +27,7 @@ describe("signAccessToken / verifyAccessToken", () => {
     const token = signAccessToken({
       userId: "user-1",
       username: "alice",
+      tokenVersion: 0,
       secret: "a-completely-different-secret-value-here",
       expiresIn: "15m"
     });
@@ -32,10 +35,20 @@ describe("signAccessToken / verifyAccessToken", () => {
     expect(() => verifyAccessToken(token, SECRET)).toThrow(InvalidTokenError);
   });
 
+  it("rejects a correctly signed token without a tokenVersion claim (issued before revocation existed)", () => {
+    const legacyToken = jwt.sign({ sub: "user-1", username: "alice" }, SECRET, {
+      algorithm: "HS256",
+      expiresIn: "15m"
+    });
+
+    expect(() => verifyAccessToken(legacyToken, SECRET)).toThrow(InvalidTokenError);
+  });
+
   it("signs with HS256 explicitly", () => {
     const token = signAccessToken({
       userId: "user-1",
       username: "alice",
+      tokenVersion: 0,
       secret: SECRET,
       expiresIn: "15m"
     });

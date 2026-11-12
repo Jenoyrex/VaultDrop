@@ -68,6 +68,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -116,7 +117,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const response = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant-content-ciphertext"));
 
@@ -176,7 +177,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const response = await request(app)
         .post("/folders")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           vaultId,
           encryptedName: nameCiphertext.ciphertext,
@@ -232,20 +233,20 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant"));
 
       const listResponse = await request(app)
         .get(`/files?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(listResponse.status).toBe(200);
       expect(JSON.stringify(listResponse.body)).not.toContain(marker);
 
       const contentsResponse = await request(app)
         .get(`/folders/contents?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(contentsResponse.status).toBe(200);
       expect(JSON.stringify(contentsResponse.body)).not.toContain(marker);
@@ -282,7 +283,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const uploadResponse = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant"));
 
@@ -290,7 +291,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const renameResponse = await request(app)
         .patch(`/files/${fileId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ name: "attempted-plaintext-rename.txt" });
 
       expect(renameResponse.status).toBe(400);
@@ -308,14 +309,14 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const uploadResponse = await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", Buffer.from("hello"), "hello.txt");
 
       const fileId = uploadResponse.body.file.id as string;
 
       const renameResponse = await request(app)
         .patch(`/files/${fileId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ encryptedName: "abc", nameIv: "def" });
 
       expect(renameResponse.status).toBe(400);
@@ -340,7 +341,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const encryptedFolderResponse = await request(app)
         .post("/folders")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           vaultId,
           encryptedName: nameCiphertext.ciphertext,
@@ -349,19 +350,19 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const legacyFolderResponse = await request(app)
         .post("/folders")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ vaultId, name: "Legacy Folder" });
 
       const encryptedRename = await request(app)
         .patch(`/folders/${encryptedFolderResponse.body.folder.id}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ name: "attempted-plaintext-rename" });
 
       expect(encryptedRename.status).toBe(400);
 
       const legacyRename = await request(app)
         .patch(`/folders/${legacyFolderResponse.body.folder.id}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ encryptedName: "abc", nameIv: "def" });
 
       expect(legacyRename.status).toBe(400);
@@ -402,7 +403,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const encryptedUpload = await request(app)
         .post(`/files/upload-encrypted?${encryptedParams.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant"));
 
@@ -410,7 +411,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       await request(app)
         .post(`/files/upload?vaultId=${legacyVaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", Buffer.from("hello"), marker);
 
       // Baseline: the legacy vault's server-side substring search does
@@ -418,7 +419,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
       // encrypted-vault result below isn't just a broken/empty query.
       const legacySearch = await request(app)
         .get(`/folders/search?vaultId=${legacyVaultId}&query=invoice`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(legacySearch.status).toBe(200);
       expect(legacySearch.body.files).toHaveLength(1);
@@ -427,7 +428,7 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
       // cannot see it — the query must never match.
       const encryptedSearch = await request(app)
         .get(`/folders/search?vaultId=${encryptedVaultId}&query=invoice`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(encryptedSearch.status).toBe(200);
       expect(encryptedSearch.body.files).toHaveLength(0);
@@ -465,13 +466,13 @@ describe("encrypted file/folder names never reach the server as plaintext", () =
 
       const uploadResponse = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant"));
 
       const subtreeResponse = await request(app)
         .get(`/folders/search?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(subtreeResponse.status).toBe(200);
       expect(JSON.stringify(subtreeResponse.body)).not.toContain(marker);

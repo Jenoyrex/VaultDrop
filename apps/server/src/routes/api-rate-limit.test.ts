@@ -8,7 +8,7 @@ import type { ServerEnv } from "@vaultdrop/config";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
 import { LocalStorageAdapter } from "../storage/local-storage-adapter.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 const BASE_ENV: ServerEnv = {
   NODE_ENV: "test",
@@ -31,6 +31,7 @@ function bearerTokenFor(ownerId: string, username = "tester"): string {
   return signAccessToken({
     userId: ownerId,
     username,
+    tokenVersion: 0,
     secret: BASE_ENV.JWT_SECRET,
     expiresIn: BASE_ENV.JWT_EXPIRES_IN
   });
@@ -59,25 +60,25 @@ describe("API rate limiting (general / upload / download)", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeApp(env: ServerEnv = BASE_ENV) {
-    const built = createFakePrisma();
+  function makeApp(env: ServerEnv = BASE_ENV, userIds: string[] = []) {
+    const built = createFakePrisma([], userIds.map((id) => testUser(id)));
     const app = createApp(built.prisma, env, new LocalStorageAdapter(tmpDir));
     return { app, ...built };
   }
 
   describe("general API limiter", () => {
     it("enforces ONE shared budget across /vaults, /folders, and /files combined, per user", async () => {
-      const { app } = makeApp();
       const ownerId = randomUUID();
+      const { app } = makeApp(BASE_ENV, [ownerId]);
       const token = bearerTokenFor(ownerId);
 
       // Budget is 3. Spend it across three DIFFERENT routers, not just one.
-      await request(app).get("/vaults").set("Authorization", `Bearer ${token}`).expect(200);
+      await request(app).get("/vaults").set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000").expect(200);
       await request(app)
         .get("/folders/contents?vaultId=" + randomUUID())
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .expect(404); // vault doesn't exist, but it still counts as a request
-      await request(app).get("/files?vaultId=" + randomUUID()).set("Authorization", `Bearer ${token}`).expect(404);
+      await request(app).get("/files?vaultId=" + randomUUID()).set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000").expect(404);
 
       // A 4th request, on yet another router, is rejected — proving the
       // budget is one shared counter across all three routers, not one
@@ -85,23 +86,24 @@ describe("API rate limiting (general / upload / download)", () => {
       // this to succeed).
       const limited = await request(app)
         .get("/vaults")
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
       expect(limited.status).toBe(429);
       expect(limited.body.error.code).toBe("RATE_LIMITED");
     });
 
     it("is keyed per user — exhausting one user's budget doesn't affect another", async () => {
-      const { app } = makeApp();
-      const tokenA = bearerTokenFor(randomUUID());
-      const tokenB = bearerTokenFor(randomUUID());
+      const [userA, userB] = [randomUUID(), randomUUID()];
+      const { app } = makeApp(BASE_ENV, [userA, userB]);
+      const tokenA = bearerTokenFor(userA);
+      const tokenB = bearerTokenFor(userB);
 
       for (let i = 0; i < 3; i++) {
-        await request(app).get("/vaults").set("Authorization", `Bearer ${tokenA}`).expect(200);
+        await request(app).get("/vaults").set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000").expect(200);
       }
-      const limitedA = await request(app).get("/vaults").set("Authorization", `Bearer ${tokenA}`);
+      const limitedA = await request(app).get("/vaults").set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
       expect(limitedA.status).toBe(429);
 
-      const stillOkB = await request(app).get("/vaults").set("Authorization", `Bearer ${tokenB}`);
+      const stillOkB = await request(app).get("/vaults").set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
       expect(stillOkB.status).toBe(200);
     });
   });
@@ -117,14 +119,14 @@ describe("API rate limiting (general / upload / download)", () => {
       // Budget is 2, shared between /upload and /upload-encrypted.
       await request(app)
         .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, "1").toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("ciphertext-1"))
         .expect(201);
 
       await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", Buffer.from("legacy plaintext"), "hello.txt")
         .expect(201);
 
@@ -134,7 +136,7 @@ describe("API rate limiting (general / upload / download)", () => {
       // stored — the fake prisma's `files` array must not grow.
       const rejected = await request(app)
         .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, "3").toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("ciphertext-3"));
 
@@ -152,12 +154,12 @@ describe("API rate limiting (general / upload / download)", () => {
       // Spend the whole budget (2) on the legacy /upload route alone.
       await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", Buffer.from("a"), "a.txt")
         .expect(201);
       await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", Buffer.from("b"), "b.txt")
         .expect(201);
 
@@ -165,7 +167,7 @@ describe("API rate limiting (general / upload / download)", () => {
       // called before in this test — proves one shared counter.
       const rejected = await request(app)
         .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, "c").toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("c"));
 
@@ -190,7 +192,7 @@ describe("API rate limiting (general / upload / download)", () => {
 
       const uploadRes = await request(app)
         .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, "dl").toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("ciphertext"));
       expect(uploadRes.status).toBe(201);
@@ -204,11 +206,11 @@ describe("API rate limiting (general / upload / download)", () => {
       // Budget is 2 — spend it with one download and one preview call.
       await request(app)
         .get(`/files/${fileId}/download`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .expect(200);
       await request(app)
         .get(`/files/${fileId}/preview`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .expect(200);
 
       // A 3rd call, to either route, is rejected — 404 would mean the
@@ -217,7 +219,7 @@ describe("API rate limiting (general / upload / download)", () => {
       // before fileService.getFileStream / any storage read) ever ran.
       const rejected = await request(app)
         .get(`/files/${fileId}/download`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
       expect(rejected.status).toBe(429);
       expect(rejected.body.error.code).toBe("RATE_LIMITED");
     });
@@ -243,32 +245,32 @@ describe("API rate limiting (general / upload / download)", () => {
       for (let i = 0; i < 2; i++) {
         await request(app)
           .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, String(i)).toString()}`)
-          .set("Authorization", `Bearer ${token}`)
+          .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
           .set("Content-Type", "application/octet-stream")
           .send(Buffer.from(`c-${i}`))
           .expect(201);
       }
       const uploadRejected = await request(app)
         .post(`/files/upload-encrypted?${encryptedUploadParams(vaultId, "x").toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("x"));
       expect(uploadRejected.status).toBe(429);
 
       // The general-API budget (20, only ~3 of it spent so far by the
       // requests above) still has plenty of room.
-      const listRes = await request(app).get("/vaults").set("Authorization", `Bearer ${token}`);
+      const listRes = await request(app).get("/vaults").set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
       expect(listRes.status).toBe(200);
 
       // The download budget is a fully separate counter and is untouched.
       const uploadedFileId = (
         await request(app)
           .get(`/files?vaultId=${vaultId}`)
-          .set("Authorization", `Bearer ${token}`)
+          .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       ).body.files[0].id as string;
       const downloadRes = await request(app)
         .get(`/files/${uploadedFileId}/download`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
       expect(downloadRes.status).toBe(200);
     });
   });
@@ -276,8 +278,9 @@ describe("API rate limiting (general / upload / download)", () => {
   describe("interaction with TRUST_PROXY_HOPS / X-Forwarded-For", () => {
     it("per-user keying is unaffected by X-Forwarded-For, regardless of TRUST_PROXY_HOPS", async () => {
       const env: ServerEnv = { ...BASE_ENV, TRUST_PROXY_HOPS: 1 };
-      const { app } = makeApp(env);
-      const token = bearerTokenFor(randomUUID());
+      const userId = randomUUID();
+      const { app } = makeApp(env, [userId]);
+      const token = bearerTokenFor(userId);
 
       // Same user token, three requests each claiming a DIFFERENT forwarded
       // client IP. If keying were (incorrectly) falling back to IP, these
@@ -286,23 +289,23 @@ describe("API rate limiting (general / upload / download)", () => {
       // share one budget (3) and the 4th is rejected.
       await request(app)
         .get("/vaults")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("X-Forwarded-For", "203.0.113.1")
         .expect(200);
       await request(app)
         .get("/vaults")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("X-Forwarded-For", "203.0.113.2")
         .expect(200);
       await request(app)
         .get("/vaults")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("X-Forwarded-For", "203.0.113.3")
         .expect(200);
 
       const limited = await request(app)
         .get("/vaults")
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("X-Forwarded-For", "203.0.113.4");
       expect(limited.status).toBe(429);
     });

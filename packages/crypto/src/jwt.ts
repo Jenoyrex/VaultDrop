@@ -4,14 +4,17 @@ import type { AccessTokenPayload } from "@vaultdrop/types";
 export interface SignAccessTokenInput {
   userId: string;
   username: string;
+  /** Current `User.tokenVersion`; see `AccessTokenPayload.ver`. */
+  tokenVersion: number;
   secret: string;
   expiresIn: string;
 }
 
 export function signAccessToken(input: SignAccessTokenInput): string {
-  const payload: Pick<AccessTokenPayload, "sub" | "username"> = {
+  const payload: Pick<AccessTokenPayload, "sub" | "username" | "ver"> = {
     sub: input.userId,
-    username: input.username
+    username: input.username,
+    ver: input.tokenVersion
   };
   return jwt.sign(payload, input.secret, {
     expiresIn: input.expiresIn as jwt.SignOptions["expiresIn"],
@@ -39,12 +42,17 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenPay
     if (typeof decoded === "string") {
       throw new InvalidTokenError();
     }
-    if (typeof decoded.sub !== "string" || typeof decoded["username"] !== "string") {
+    if (
+      typeof decoded.sub !== "string" ||
+      typeof decoded["username"] !== "string" ||
+      !Number.isInteger(decoded["ver"])
+    ) {
       throw new InvalidTokenError();
     }
     return {
       sub: decoded.sub,
       username: decoded["username"] as string,
+      ver: decoded["ver"] as number,
       iat: typeof decoded.iat === "number" ? decoded.iat : undefined,
       exp: typeof decoded.exp === "number" ? decoded.exp : undefined
     };

@@ -5,7 +5,7 @@ import type { ServerEnv } from "@vaultdrop/config";
 import type { StorageAdapter } from "@vaultdrop/types";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 const TEST_ENV: ServerEnv = {
   NODE_ENV: "test",
@@ -47,6 +47,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -64,13 +65,13 @@ const VALID_ENCRYPTION = {
 describe("POST /vaults", () => {
   it("rejects a request with no encryption envelope at all, and creates nothing (plaintext vaults can no longer be created)", async () => {
     const ownerId = randomUUID();
-    const { prisma, vaults } = createFakePrisma();
+    const { prisma, vaults } = createFakePrisma([], [testUser(ownerId)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     const token = bearerTokenFor(ownerId);
 
     const res = await request(app)
       .post("/vaults")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({ name: "My Vault" });
 
     expect(res.status).toBe(400);
@@ -80,13 +81,13 @@ describe("POST /vaults", () => {
 
   it("rejects a malformed/incomplete encryption envelope (missing fields), and creates nothing", async () => {
     const ownerId = randomUUID();
-    const { prisma, vaults } = createFakePrisma();
+    const { prisma, vaults } = createFakePrisma([], [testUser(ownerId)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     const token = bearerTokenFor(ownerId);
 
     const res = await request(app)
       .post("/vaults")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         name: "My Vault",
         encryption: {
@@ -103,13 +104,13 @@ describe("POST /vaults", () => {
 
   it("rejects an encryption envelope with wrong-typed/empty fields, and creates nothing", async () => {
     const ownerId = randomUUID();
-    const { prisma, vaults } = createFakePrisma();
+    const { prisma, vaults } = createFakePrisma([], [testUser(ownerId)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     const token = bearerTokenFor(ownerId);
 
     const res = await request(app)
       .post("/vaults")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         name: "My Vault",
         encryption: {
@@ -126,13 +127,13 @@ describe("POST /vaults", () => {
 
   it("an authenticated user cannot create a plaintext vault even by explicitly sending encryption: null", async () => {
     const ownerId = randomUUID();
-    const { prisma, vaults } = createFakePrisma();
+    const { prisma, vaults } = createFakePrisma([], [testUser(ownerId)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     const token = bearerTokenFor(ownerId);
 
     const res = await request(app)
       .post("/vaults")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({ name: "My Vault", encryption: null });
 
     expect(res.status).toBe(400);
@@ -142,13 +143,13 @@ describe("POST /vaults", () => {
 
   it("creates an encrypted vault, persisting the full encryption envelope", async () => {
     const ownerId = randomUUID();
-    const { prisma, vaults } = createFakePrisma();
+    const { prisma, vaults } = createFakePrisma([], [testUser(ownerId)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     const token = bearerTokenFor(ownerId);
 
     const res = await request(app)
       .post("/vaults")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         name: "Encrypted Vault",
         encryption: {
@@ -201,7 +202,7 @@ describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
     const vaultId = randomUUID();
     const { prisma, vaults } = createFakePrisma([
       { id: vaultId, ownerId: userA, name: "User A's Vault", ...VALID_ENCRYPTION }
-    ]);
+    ], [testUser(userB)]);
     const app = createApp(prisma, TEST_ENV, unusedStorage);
     return {
       vaultId,
@@ -217,7 +218,7 @@ describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
 
     const res = await request(app)
       .get(`/vaults/${vaultId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -228,7 +229,7 @@ describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
 
     const res = await request(app)
       .get(`/vaults/${vaultId}`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(200);
     expect(res.body.vault.id).toBe(vaultId);
@@ -239,7 +240,7 @@ describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
 
     const res = await request(app)
       .delete(`/vaults/${vaultId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -254,7 +255,7 @@ describe("cross-user authorization on GET/DELETE /vaults/:vaultId", () => {
 
     const res = await request(app)
       .get(`/vaults/${randomUUID()}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(404);
   });

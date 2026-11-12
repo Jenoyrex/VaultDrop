@@ -64,7 +64,7 @@ export function createFileRouter(
     storageDriverLabel
   );
 
-  const requireAuth = createAuthMiddleware(env);
+  const requireAuth = createAuthMiddleware(env, prisma);
 
   const uploadQuerySchema = z.object({
     vaultId: z.string().uuid(),

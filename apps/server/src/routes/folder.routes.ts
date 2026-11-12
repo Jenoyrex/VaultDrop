@@ -15,7 +15,7 @@ export function createFolderRouter(
 ): Router {
   const router = Router();
   const folderService = new FolderService(prisma);
-  const requireAuth = createAuthMiddleware(env);
+  const requireAuth = createAuthMiddleware(env, prisma);
 
   // Discriminated create payload: a legacy folder is created with a
   // plaintext `name`; a folder in an encrypted vault with a client-

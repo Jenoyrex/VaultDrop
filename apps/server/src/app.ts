@@ -11,6 +11,7 @@ import { createFileRouter } from "./routes/file.routes.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { requestLogger } from "./middleware/request-logger.js";
 import { createApiRateLimiters } from "./middleware/rate-limit.js";
+import { createOriginCheck } from "./middleware/origin-check.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
@@ -26,7 +27,14 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // including body parsing and everything downstream.
   app.use(requestLogger);
   app.use(helmet());
+  // Exactly one allowed origin (validated as a URL at boot, so never "*"),
+  // with credentials so the dev setup (web :3000 -> API :4000) can send the
+  // session cookie. In production the browser reaches the API same-origin
+  // through the /api proxy and CORS is not involved at all.
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  // Before body parsing and every router, so a forged cross-origin
+  // request is rejected before any work is done on it.
+  app.use(createOriginCheck(env));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => {

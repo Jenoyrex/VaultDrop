@@ -70,11 +70,18 @@ export interface FakeUserRow {
   id: string;
   username: string;
   passwordHash: string;
+  /** Optional when seeding; defaults to 0 like the real column. */
+  tokenVersion?: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
 type CreateUserData = Omit<FakeUserRow, "id" | "createdAt" | "updatedAt">;
+
+/** Mirrors Prisma's `{ increment: n }` atomic number operation, the only one the app uses. */
+type UserUpdateData = Partial<Omit<FakeUserRow, "id" | "tokenVersion">> & {
+  tokenVersion?: number | { increment: number };
+};
 
 /** Mirrors the real `VaultService.createVault` call: `ownerId`/`name` are
  * always given, every other column (encryption envelope fields) is only
@@ -111,6 +118,12 @@ interface FindManyWhere {
   vaultId: string;
   folderId?: string | null;
   parentId?: string | null;
+}
+
+/** A user row for tests that authenticate as someone who owns no seeded vault (e.g. "User B"). */
+export function testUser(id: string, username = `user-${id.slice(0, 8)}`): FakeUserRow {
+  const now = new Date();
+  return { id, username, passwordHash: "", tokenVersion: 0, createdAt: now, updatedAt: now };
 }
 
 export function createFakePrisma(
@@ -166,7 +179,23 @@ export function createFakePrisma(
   }));
   const files: FakeFileRow[] = [];
   const folders: FakeFolderRow[] = [];
-  const users: FakeUserRow[] = [...seedUsers];
+  const users: FakeUserRow[] = seedUsers.map((seed) => ({ tokenVersion: 0, ...seed }));
+  // The real schema has a foreign key from vaults.ownerId to users.id, so
+  // a seeded vault implies its owner exists. Creating that row here lets
+  // tests that only seed vaults still authenticate as the owner (the auth
+  // middleware looks the user up to check tokenVersion).
+  for (const vault of vaults) {
+    if (!users.some((user) => user.id === vault.ownerId)) {
+      users.push({
+        id: vault.ownerId,
+        username: `owner-${vault.ownerId.slice(0, 8)}`,
+        passwordHash: "",
+        tokenVersion: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+  }
 
   const fake = {
     user: {
@@ -183,6 +212,7 @@ export function createFakePrisma(
         const nowCreated = new Date();
         const row: FakeUserRow = {
           id: randomUUID(),
+          tokenVersion: 0,
           createdAt: nowCreated,
           updatedAt: nowCreated,
           ...data
@@ -195,13 +225,19 @@ export function createFakePrisma(
         data
       }: {
         where: { id: string };
-        data: Partial<Omit<FakeUserRow, "id">>;
+        data: UserUpdateData;
       }) {
         const row = users.find((user) => user.id === where.id);
         if (!row) {
           throw new Error(`fake-prisma: user ${where.id} not found`);
         }
-        Object.assign(row, data, { updatedAt: new Date() });
+        const { tokenVersion, ...rest } = data;
+        Object.assign(row, rest, { updatedAt: new Date() });
+        if (typeof tokenVersion === "number") {
+          row.tokenVersion = tokenVersion;
+        } else if (tokenVersion) {
+          row.tokenVersion = (row.tokenVersion ?? 0) + tokenVersion.increment;
+        }
         return row;
       }
     },
