@@ -158,16 +158,58 @@ this repository.
   (`apps/server/src/middleware/origin-check.ts`); CORS allows exactly one
   origin with credentials (`apps/server/src/app.ts`).
 
-### 9. Online password guessing and enumeration
+### 9. Online password guessing, enumeration, and IP spoofing
 
 - **Controls:** per-IP limits on register/login and a stricter one on
-  username checks; per-user limits on the rest of the API
-  (`apps/server/src/middleware/rate-limit.ts`); generic login errors.
+  username checks; a per-IP flood ceiling in front of everything; per-user
+  limits on the rest of the API (`apps/server/src/middleware/rate-limit.ts`);
+  generic login errors.
 - **Limits:** limits are in memory, per process. `/auth/check-username`
   deliberately reveals whether a username exists (the sign-in flow needs
-  it), so enumeration is rate-limited, not prevented. Behind proxies the
-  client IP is only correct if `TRUST_PROXY_HOPS` matches the real hop
-  count.
+  it), so enumeration is rate-limited, not prevented.
+
+**How the client IP is determined.** Per-IP limits are only as good as
+`req.ip`, which Express derives from `X-Forwarded-For` using the
+`TRUST_PROXY_HOPS` count (`apps/server/src/app.ts`). Each proxy appends the
+address it received the connection from; anything to the left of that was
+written by an earlier hop, or by the client.
+
+- Production chain: **browser → Netlify edge → Cloudflare / Render load
+  balancer → app.** Expected value: **`TRUST_PROXY_HOPS=2`** (the load
+  balancer is the TCP peer, and the Netlify entry is the next one).
+  Cloudflare in front of Render may add a hop, so this is an expectation,
+  not a guarantee, and **must be verified after deploy** (below).
+- **Too low:** every user appears as Netlify's egress IP and shares one
+  rate-limit bucket. A live probe before this change showed exactly that:
+  requests through the Netlify proxy were counted in a different bucket
+  from direct ones.
+- **Too high:** `req.ip` becomes an entry the client wrote itself, so an
+  attacker rotates a forged `X-Forwarded-For` value and gets a fresh
+  per-IP budget every time. Covered by
+  `apps/server/src/routes/debug-ip.test.ts`.
+- **Bypassing the proxy:** the Render URL is public. A direct request has
+  one hop fewer, so with the count right for the Netlify path, a direct
+  caller could choose `req.ip`. **Control:** Netlify signs every proxied
+  request (`signed = "API_PROXY_SECRET"` in `apps/web/netlify.toml`, an
+  HS256 JWS in `x-nf-sign`) and, in production, the API rejects anything
+  without a valid signature except `/health`
+  (`apps/server/src/middleware/proxy-signature.ts`). The hop count then
+  only has to be right for the one allowed path.
+
+**Verifying the hop count after a deploy.**
+1. On Render set `DEBUG_IP_ECHO=1` and redeploy.
+2. Log in on the live site, then open
+   `https://vaultdrop95.netlify.app/api/debug/ip` in the same browser. It
+   returns `{ ip, ips, xff }`.
+3. `ip` must equal your real public IP (compare with any "what is my IP"
+   page). If it shows a Netlify or Cloudflare address, increase
+   `TRUST_PROXY_HOPS` by one; if `xff` has fewer entries than the hop
+   count, decrease it. Repeat until `ip` is your address.
+4. Optional spoof check: `curl` the same URL with your session cookie and
+   `-H "X-Forwarded-For: 6.6.6.6"`; `ip` must still be your address.
+5. **Set `DEBUG_IP_ECHO=0` (or remove it) and redeploy.** The endpoint
+   only echoes your own headers back and needs a session, but it is a
+   debugging aid and should not stay on.
 
 ## Out of scope and known limitations
 
@@ -180,6 +222,8 @@ this repository.
 | Metadata in plaintext (vault names, MIME types, sizes, structure, timestamps) | Encrypt vault names and MIME types with the DEK; pad file sizes to buckets. Structure and timing cannot be hidden from a server that stores the files. |
 | Revocation is per user, not per device | A server-side session table keyed by a random session id. |
 | Rate limits are per process | A shared store (e.g. Redis) for `express-rate-limit`. |
+| `TRUST_PROXY_HOPS` is a manual setting that breaks silently if the platform adds or removes a proxy | Re-verify with `/api/debug/ip` after any hosting change; or key per-IP limits on a header that only the signed Netlify hop sets (e.g. `x-nf-client-connection-ip`, trusted only when `x-nf-sign` is valid). |
+| Proxy-signature enforcement depends on a shared secret on two platforms | Rotate `API_PROXY_SECRET` on both sides together; a mismatch fails closed (every API call returns 403). |
 | Unlocked DEKs are extractable and stay unlocked while the tab is open | Re-import DEKs as non-extractable except during a password change, and add an idle auto-lock. |
 | No second factor | TOTP or WebAuthn on login. (It would not protect the vault itself, whose security rests on the password.) |
 | Legacy plaintext vaults | A client-side migration that re-uploads their files encrypted. |

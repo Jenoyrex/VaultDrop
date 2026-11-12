@@ -204,16 +204,33 @@ fill storage.
   and downloads/previews (60) have extra, tighter per-user budgets on top.
 - The client IP comes from Express `trust proxy` set to an explicit hop
   count (`TRUST_PROXY_HOPS`), never `true`, so a client cannot choose its
-  own IP by sending `X-Forwarded-For`.
+  own IP by sending `X-Forwarded-For`. Expected production value is 2
+  (browser → Netlify → Render load balancer → app), confirmed after deploy
+  with the opt-in `/debug/ip` endpoint (`DEBUG_IP_ECHO=1`).
+- A per-IP flood ceiling (10x the per-user API budget) runs before
+  `requireAuth`, so its database lookup is always behind a limiter.
+- In production the API only accepts requests signed by the Netlify proxy
+  (`x-nf-sign`, verified against `API_PROXY_SECRET`; `/health` exempt).
+  Without this, the public Render URL would be one hop shorter than the
+  proxied path, and any hop count right for one path would let callers on
+  the other forge their IP.
 
 **Alternatives.** A shared Redis store (correct across instances, but an
 extra service); limiting at the CDN/WAF (not portable); per-IP limits
 everywhere (punishes shared IPs).
 
+**Alternatives for the proxy bypass.** Accept that direct callers can
+spoof (simplest, but leaves the login limiter bypassable); restrict
+Render to Netlify's IP ranges (not published as a stable list); key
+limits on Netlify's `x-nf-client-connection-ip` (spoofable on direct
+requests without the signature check anyway).
+
 **Consequences.** Limits are per process. With one Render instance they
 are exact; with several, each enforces its own budget. A wrong
 `TRUST_PROXY_HOPS` either lumps all users under the proxy's IP or lets
-clients spoof theirs.
+clients spoof theirs. The API is no longer usable except through the web
+app's `/api` proxy in production, and `API_PROXY_SECRET` must match on
+Netlify and Render or every request fails with 403.
 
 ---
 

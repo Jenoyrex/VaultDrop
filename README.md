@@ -231,7 +231,10 @@ Both apps ship a `.env.example` documenting every variable they read (`apps/serv
 - `JWT_SECRET` — must be changed from the placeholder before any production deploy (rejected at boot otherwise)
 - `STORAGE_DRIVER` — `local` or `cloud`; `CLOUD_STORAGE_*` variables configure the S3-compatible endpoint (Backblaze B2 in production)
 - `CORS_ORIGIN` — the exact web origin (a URL, never `*`); also the only origin allowed to make state-changing requests (CSRF check)
-- `MAX_UPLOAD_BYTES`, rate-limit tuning variables, `TRUST_PROXY_HOPS`
+- `TRUST_PROXY_HOPS` — number of proxies in front of the API (expected 2 in production; verify with `DEBUG_IP_ECHO`, see [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md))
+- `API_PROXY_SECRET` — required in production; must match the Netlify variable of the same name used to sign proxied requests. The API rejects unsigned requests (except `/health`)
+- `DEBUG_IP_ECHO` — temporary; `1` enables the authenticated `/api/debug/ip` check, keep it `0` otherwise
+- `MAX_UPLOAD_BYTES`, rate-limit tuning variables
 
 **Web**
 - `NEXT_PUBLIC_API_URL` — `http://localhost:4000` in local dev; `/api` in production (same-origin proxy defined in `apps/web/netlify.toml`)
@@ -248,7 +251,7 @@ pnpm test        # Vitest across all apps/packages
 pnpm build       # Production build of every app/package
 ```
 
-Current suite: 280 passing tests and 1 skipped (the opt-in live B2 test) across 4 packages — config 8, crypto 6, server 122 + 1 skipped, web 144[^tests].
+Current suite: 294 passing tests and 1 skipped (the opt-in live B2 test) across 4 packages — config 10, crypto 6, server 134 + 1 skipped, web 144[^tests].
 
 Test coverage includes, among others:
 - Server-side vault creation, including enforcement of the mandatory encryption envelope on new vaults
@@ -273,6 +276,7 @@ CI (GitHub Actions) runs a production-dependency audit (`pnpm audit --prod --aud
 
 - **Transport:** HTTPS in production (Netlify + Render)
 - **Sessions:** a JWT (15-minute default expiry[^jwt]) in an httpOnly cookie — `__Host-` prefixed, `Secure`, `SameSite=Lax` in production. Page JavaScript cannot read it, so an XSS bug cannot exfiltrate it (it can still make requests while the page is open). Each token carries the user's `tokenVersion`, checked on every request; logout and password change increment it, revoking all of that user's sessions server-side.
+- **Proxy-only API:** in production the API only accepts requests signed by the Netlify proxy (`x-nf-sign`), so the public Render URL can't be used to bypass the proxy or forge the client IP the rate limiter sees
 - **CSRF:** `SameSite=Lax` plus an Origin/Referer check that rejects state-changing requests from any origin other than `CORS_ORIGIN` (`apps/server/src/middleware/origin-check.ts`)
 - **HTTP hardening:** Helmet security headers, nonce-based Content-Security-Policy
 - **Rate limiting:** separate budgets for auth endpoints and general API/upload/download traffic, keyed per-user where authenticated
@@ -340,4 +344,4 @@ All rights reserved — see [`LICENSE`](./LICENSE). This repository is shared fo
 [^argon2]: `grep -n -A4 ARGON2_OPTIONS packages/crypto/src/password.ts` → `memoryCost: 19456` (KiB), `timeCost: 2`, `parallelism: 1`.
 [^pbkdf2]: `grep -n DEFAULT_KDF_ITERATIONS apps/web/src/lib/crypto/kdf.ts` → `600_000`. Stored per vault (`kekIterations`), so existing vaults keep the count they were created with.
 [^jwt]: `grep -n JWT_EXPIRES_IN packages/config/src/server-env.ts` → default `"15m"`.
-[^tests]: `pnpm test` on 2026-11-12, summing each package's `Tests` line: config 8, crypto 6, server 122 passed + 1 skipped, web 144.
+[^tests]: `pnpm test` on 2026-11-12, summing each package's `Tests` line: config 10, crypto 6, server 134 passed + 1 skipped, web 144.
