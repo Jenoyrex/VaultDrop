@@ -9,7 +9,7 @@ import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
 import { LocalStorageAdapter } from "../storage/local-storage-adapter.js";
 import { CloudStorageAdapter } from "../storage/cloud-storage-adapter.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 const { subtle } = webcrypto;
 
@@ -62,6 +62,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -122,7 +123,7 @@ describe("file upload routes", () => {
 
       const response = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(wireBytes);
 
@@ -158,7 +159,7 @@ describe("file upload routes", () => {
       const vaultId = randomUUID();
       const { prisma } = createFakePrisma([
         { id: vaultId, ownerId: otherOwnerId, name: "Someone else's vault" }
-      ]);
+      ], [testUser(ownerId)]);
       const storage = new LocalStorageAdapter(tmpDir);
       const app = createApp(prisma, TEST_ENV, storage);
       const token = bearerTokenFor(ownerId);
@@ -175,7 +176,7 @@ describe("file upload routes", () => {
 
       const response = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(Buffer.from("irrelevant"));
 
@@ -198,7 +199,7 @@ describe("file upload routes", () => {
 
       const response = await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", plaintext, "hello.txt");
 
       expect(response.status).toBe(201);
@@ -259,7 +260,7 @@ describe("POST /files/upload-encrypted against a real CloudStorageAdapter (regre
 
       const response = await request(app)
         .post(`/files/upload-encrypted?${params.toString()}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .set("Content-Type", "application/octet-stream")
         .send(oversizedBody);
 

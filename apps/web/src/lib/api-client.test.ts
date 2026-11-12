@@ -2,6 +2,34 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { generateAesKey } from "@/lib/crypto";
 import { authApi, fileApi, onSessionExpired } from "./api-client.js";
 
+describe("cookie-based session transport", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("sends credentials: 'include' and no Authorization header on JSON and raw requests", async () => {
+    const calls: RequestInit[] = [];
+    global.fetch = vi.fn(async (_url, init) => {
+      calls.push((init ?? {}) as RequestInit);
+      return new Response(JSON.stringify({ user: { id: "u", username: "u", createdAt: "" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as unknown as typeof fetch;
+
+    await authApi.me();
+    await fileApi.download("file-1");
+
+    expect(calls).toHaveLength(2);
+    for (const init of calls) {
+      expect(init.credentials).toBe("include");
+      expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    }
+  });
+});
+
 describe("fileApi.uploadEncrypted", () => {
   const originalFetch = global.fetch;
 
@@ -31,7 +59,6 @@ describe("fileApi.uploadEncrypted", () => {
       "vault-1",
       file,
       vaultDek,
-      "test-token",
       "folder-1"
     );
 
@@ -56,7 +83,9 @@ describe("fileApi.uploadEncrypted", () => {
     expect(capturedInit?.duplex).toBe("half");
 
     const headers = capturedInit?.headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer test-token");
+    // Session travels as the httpOnly cookie; JS never sets Authorization.
+    expect(headers.Authorization).toBeUndefined();
+    expect(capturedInit?.credentials).toBe("include");
     expect(headers["Content-Type"]).toBe("application/octet-stream");
 
     // The body is the ciphertext ReadableStream, never the raw File and
@@ -74,7 +103,7 @@ describe("fileApi.uploadEncrypted", () => {
     ) as unknown as typeof fetch;
 
     await expect(
-      fileApi.uploadEncrypted("vault-1", file, vaultDek, "token")
+      fileApi.uploadEncrypted("vault-1", file, vaultDek)
     ).rejects.toThrow("Upload failed");
   });
 });
@@ -102,7 +131,7 @@ describe("onSessionExpired", () => {
     const listener = vi.fn();
     const unsubscribe = onSessionExpired(listener);
 
-    await expect(authApi.me("stale-token")).rejects.toThrow();
+    await expect(authApi.me()).rejects.toThrow();
 
     expect(listener).toHaveBeenCalledTimes(1);
     unsubscribe();
@@ -126,7 +155,7 @@ describe("onSessionExpired", () => {
     const listener = vi.fn();
     const unsubscribe = onSessionExpired(listener);
 
-    await expect(authApi.me("some-token")).rejects.toThrow();
+    await expect(authApi.me()).rejects.toThrow();
 
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
@@ -139,7 +168,7 @@ describe("onSessionExpired", () => {
     const unsubscribe = onSessionExpired(listener);
     unsubscribe();
 
-    await expect(authApi.me("stale-token")).rejects.toThrow();
+    await expect(authApi.me()).rejects.toThrow();
 
     expect(listener).not.toHaveBeenCalled();
   });
@@ -149,7 +178,7 @@ describe("onSessionExpired", () => {
 
     const unsubscribe = onSessionExpired(() => undefined);
 
-    await expect(authApi.me("stale-token")).rejects.toMatchObject({
+    await expect(authApi.me()).rejects.toMatchObject({
       status: 401,
       code: "INVALID_TOKEN"
     });

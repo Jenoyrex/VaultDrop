@@ -4,19 +4,23 @@ import * as React from "react";
 import type { UserDTO } from "@vaultdrop/types";
 import { authApi, onSessionExpired, ApiError } from "@/lib/api-client";
 
-const STORAGE_KEY = "vaultdrop.session";
+/**
+ * Key the pre-cookie version of this app stored `{ user, accessToken }`
+ * under. Nothing reads it any more; it is removed on load so a token left
+ * behind by an old version does not sit in localStorage indefinitely.
+ */
+const LEGACY_STORAGE_KEY = "vaultdrop.session";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 
-interface StoredSession {
-  user: UserDTO;
-  accessToken: string;
-}
-
+/**
+ * The session token is an httpOnly cookie set by the API: this provider
+ * never sees it and keeps no copy anywhere. "Am I signed in?" is answered
+ * by asking the server (`/auth/me`), which reads the cookie itself.
+ */
 interface AuthContextValue {
   status: AuthStatus;
   user: UserDTO | null;
-  accessToken: string | null;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -24,109 +28,69 @@ interface AuthContextValue {
 
 const AuthContext = React.createContext<AuthContextValue | undefined>(undefined);
 
-function readStoredSession(): StoredSession | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredSession;
-    if (!parsed.accessToken || !parsed.user) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredSession(session: StoredSession | null): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  if (session) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  } else {
-    window.localStorage.removeItem(STORAGE_KEY);
-  }
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = React.useState<AuthStatus>("loading");
   const [user, setUser] = React.useState<UserDTO | null>(null);
-  const [accessToken, setAccessToken] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    const stored = readStoredSession();
-    if (!stored) {
-      setStatus("unauthenticated");
-      return;
+    try {
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      // Storage can be unavailable (privacy mode); nothing to clean up then.
     }
 
-    // Re-validate the token against the server rather than trusting the
-    // cached user blindly (covers expired/rotated secrets, deleted users).
     authApi
-      .me(stored.accessToken)
+      .me()
       .then((result) => {
         setUser(result.user);
-        setAccessToken(stored.accessToken);
         setStatus("authenticated");
       })
       .catch(() => {
-        writeStoredSession(null);
         setStatus("unauthenticated");
       });
   }, []);
 
   const login = React.useCallback(async (username: string, password: string) => {
     const result = await authApi.login(username, password);
-    writeStoredSession({ user: result.user, accessToken: result.accessToken });
     setUser(result.user);
-    setAccessToken(result.accessToken);
     setStatus("authenticated");
   }, []);
 
   const register = React.useCallback(async (username: string, password: string) => {
     const result = await authApi.register(username, password);
-    writeStoredSession({ user: result.user, accessToken: result.accessToken });
     setUser(result.user);
-    setAccessToken(result.accessToken);
     setStatus("authenticated");
   }, []);
 
   // Shared by an explicit logout and a discovered session-expiry — both
-  // end at the exact same local state, just reached differently (the
-  // latter never attempts the server-side /auth/logout call below, since
-  // a token already known to be invalid has nothing useful to revoke).
+  // end at the exact same local state.
   const clearSession = React.useCallback(() => {
-    writeStoredSession(null);
     setUser(null);
-    setAccessToken(null);
     setStatus("unauthenticated");
   }, []);
 
   const logout = React.useCallback(async () => {
-    if (accessToken) {
-      try {
-        await authApi.logout(accessToken);
-      } catch (error) {
-        // A failed server-side logout call (e.g. token already expired)
-        // should never prevent the client from clearing its own session.
-        if (!(error instanceof ApiError)) {
-          throw error;
-        }
+    try {
+      // The server revokes the token (tokenVersion bump) and clears the
+      // cookie; JavaScript cannot clear an httpOnly cookie itself.
+      await authApi.logout();
+    } catch (error) {
+      // A failed server-side logout call should never prevent the client
+      // from clearing its own session state.
+      if (!(error instanceof ApiError)) {
+        throw error;
       }
     }
     clearSession();
-  }, [accessToken, clearSession]);
+  }, [clearSession]);
 
   // Centralized session-expiry handling: any API call anywhere in the app
-  // that discovers the bearer token itself is invalid/expired (see
-  // `onSessionExpired` in api-client.ts) lands here, once, instead of each
-  // feature handling its own broken-session UI independently. This reuses
-  // the exact same `status` transition as an explicit logout, so
+  // that discovers the session itself is invalid/expired/revoked (see
+  // `onSessionExpired` in api-client.ts) lands here, once. This reuses the
+  // exact same `status` transition as an explicit logout, so
   // `DashboardLayout`'s redirect-to-/auth and `VaultKeyProvider`'s
-  // clear-all-unlocked-DEKs effect (both already keyed off `status`) fire
-  // the same way for either path — no separate wiring needed for either.
+  // clear-all-unlocked-DEKs effect (both keyed off `status`) fire the same
+  // way for either path.
   React.useEffect(() => {
     return onSessionExpired(() => {
       clearSession();
@@ -134,8 +98,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [clearSession]);
 
   const value = React.useMemo<AuthContextValue>(
-    () => ({ status, user, accessToken, login, register, logout }),
-    [status, user, accessToken, login, register, logout]
+    () => ({ status, user, login, register, logout }),
+    [status, user, login, register, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

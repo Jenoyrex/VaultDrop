@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Folder, Pencil } from "lucide-react";
 
 import { folderApi, type FolderDTO } from "@/lib/api-client";
-import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { useDisplayName } from "@/hooks/useDisplayName";
 import { encryptText } from "@/lib/crypto";
@@ -23,7 +22,6 @@ export default function FolderCard({
   onRenamed,
   pathLabel
 }: FolderCardProps) {
-  const { accessToken } = useAuth();
   const { getVaultKey } = useVaultKeys();
 
   const [renameOpen, setRenameOpen] = useState(false);
@@ -39,7 +37,6 @@ export default function FolderCard({
   const nameForDisplay = displayName ?? (nameError ? "Unable to decrypt name" : "Loading…");
 
   async function handleRename(newName: string) {
-    if (!accessToken) return;
 
     if (nameError) {
       alert(
@@ -58,14 +55,12 @@ export default function FolderCard({
 
       await folderApi.rename(
         folder.id,
-        { encryptedName: ciphertext, nameIv: iv },
-        accessToken
+        { encryptedName: ciphertext, nameIv: iv }
       );
     } else {
       await folderApi.rename(
         folder.id,
-        { name: newName },
-        accessToken
+        { name: newName }
       );
     }
 

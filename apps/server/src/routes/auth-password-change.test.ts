@@ -40,6 +40,7 @@ function bearerTokenFor(userId: string, username: string): string {
   return signAccessToken({
     userId,
     username,
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -107,7 +108,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -143,7 +144,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: "definitely-the-wrong-password",
         newPassword: NEW_PASSWORD,
@@ -173,7 +174,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -202,7 +203,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -227,7 +228,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -254,7 +255,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${tokenA}`)
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -286,7 +287,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -323,7 +324,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -356,7 +357,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,
@@ -409,7 +410,7 @@ describe("PUT /auth/password", () => {
 
     const res = await request(app)
       .put("/auth/password")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .send({
         currentPassword: CURRENT_PASSWORD,
         newPassword: NEW_PASSWORD,

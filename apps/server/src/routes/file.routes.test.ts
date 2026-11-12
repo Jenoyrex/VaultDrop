@@ -8,7 +8,7 @@ import type { ServerEnv } from "@vaultdrop/config";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
 import { LocalStorageAdapter } from "../storage/local-storage-adapter.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 /**
  * Cross-user authorization (IDOR) regression tests for the file routes.
@@ -37,6 +37,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -59,7 +60,7 @@ describe("cross-user authorization on /files", () => {
     const vaultId = randomUUID();
     const { prisma, files } = createFakePrisma([
       { id: vaultId, ownerId: userA, name: "User A's Vault" }
-    ]);
+    ], [testUser(userB)]);
     const storage = new LocalStorageAdapter(tmpDir);
     const app = createApp(prisma, TEST_ENV, storage);
     const tokenA = bearerTokenFor(userA);
@@ -68,7 +69,7 @@ describe("cross-user authorization on /files", () => {
     const plaintext = Buffer.from("User A's private content", "utf8");
     const uploadRes = await request(app)
       .post(`/files/upload?vaultId=${vaultId}`)
-      .set("Authorization", `Bearer ${tokenA}`)
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000")
       .attach("file", plaintext, "secret.txt");
     expect(uploadRes.status).toBe(201);
     const fileId = uploadRes.body.file.id as string;
@@ -81,7 +82,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .get(`/files/${fileId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -92,7 +93,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .patch(`/files/${fileId}`)
-      .set("Authorization", `Bearer ${tokenB}`)
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000")
       .send({ name: "renamed-by-attacker.txt" });
 
     expect(res.status).toBe(403);
@@ -107,7 +108,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .delete(`/files/${fileId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -117,7 +118,7 @@ describe("cross-user authorization on /files", () => {
     // still being able to download it afterward.
     const downloadRes = await request(app)
       .get(`/files/${fileId}/download`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
     expect(downloadRes.status).toBe(200);
     expect(downloadRes.text).toBe("User A's private content");
   });
@@ -127,7 +128,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .get(`/files/${fileId}/download`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -140,7 +141,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .get(`/files/${fileId}/preview`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -152,17 +153,17 @@ describe("cross-user authorization on /files", () => {
 
     const metaRes = await request(app)
       .get(`/files/${fileId}`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
     expect(metaRes.status).toBe(200);
 
     const downloadRes = await request(app)
       .get(`/files/${fileId}/download`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
     expect(downloadRes.status).toBe(200);
 
     const deleteRes = await request(app)
       .delete(`/files/${fileId}`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
     expect(deleteRes.status).toBe(204);
     expect(files.some((f) => f.id === fileId)).toBe(false);
   });
@@ -172,7 +173,7 @@ describe("cross-user authorization on /files", () => {
 
     const res = await request(app)
       .get(`/files/${randomUUID()}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(404);
   });

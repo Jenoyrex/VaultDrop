@@ -110,10 +110,9 @@ export async function decryptResponseToBlob(
  */
 export async function fetchFileBlob(
   file: EncryptableFile,
-  token: string,
   vaultDek: CryptoKey | undefined
 ): Promise<Blob> {
-  const response = await fileApi.download(file.id, token);
+  const response = await fileApi.download(file.id);
 
   if (!response.ok) {
     throw new Error("Download failed");

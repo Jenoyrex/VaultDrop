@@ -11,7 +11,9 @@
  * generic template:
  *  - `connect-src` is scoped to exactly the configured API origin
  *    (`NEXT_PUBLIC_API_URL`'s origin) — every fetch() in this app targets
- *    that one origin and nothing else.
+ *    that one origin and nothing else. In production the API is reached
+ *    through the same-origin `/api` proxy, so `apiOrigin` is empty and
+ *    `connect-src` is just `'self'`.
  *  - `img-src`/`frame-src` include `blob:` — decrypted image previews
  *    (ImageViewer) and the PDF preview iframe (PdfViewer) both render
  *    from `URL.createObjectURL(blob)` results.
@@ -47,7 +49,8 @@
 export interface BuildCspOptions {
   /** The API origin (scheme + host + port, no path) fetches are allowed
    * to reach — must exactly match `NEXT_PUBLIC_API_URL`'s origin, or
-   * every fetch() in the app is blocked by the browser. */
+   * every fetch() in the app is blocked by the browser. Empty string when
+   * `NEXT_PUBLIC_API_URL` is a same-origin path such as "/api". */
   apiOrigin: string;
   /** Required when `isProduction` is true — without it, Next's own
    * inline hydration bootstrap script has no way to satisfy `script-src`
@@ -77,7 +80,7 @@ export function buildCsp({ apiOrigin, nonce, isProduction }: BuildCspOptions): s
     `style-src-attr 'unsafe-inline'`,
     `img-src 'self' blob:`,
     `font-src 'self'`,
-    `connect-src 'self' ${apiOrigin}`,
+    `connect-src 'self'${apiOrigin ? ` ${apiOrigin}` : ""}`,
     `frame-src 'self' blob:`,
     `frame-ancestors 'none'`,
     `object-src 'none'`,

@@ -1,5 +1,11 @@
 # Security Review
 
+> **Snapshot note:** this review predates the move to httpOnly cookie
+> sessions. Its "Session tokens" section (bearer tokens, no revocation)
+> and its test count describe the code at the time it was written. For
+> the current design see `docs/design-decisions.md` and
+> `docs/THREAT_MODEL.md`.
+
 **Scope:** A maintainer-performed source-level review of VaultDrop's
 authentication, authorization, encryption, and API-hardening code, cross-
 checked against the automated test suite. This is a documented

@@ -18,7 +18,7 @@ describe("fileApi.uploadEncrypted — unsupported browser", () => {
       const file = new File(["hello"], "hello.txt", { type: "text/plain" });
 
       await expect(
-        fileApi.uploadEncrypted("vault-1", file, vaultDek, "token")
+        fileApi.uploadEncrypted("vault-1", file, vaultDek)
       ).rejects.toBeInstanceOf(UnsupportedBrowserError);
     } finally {
       globalThis.Request = originalRequest;

@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # One pnpm workspace rooted at the repo root: Dependabot reads
+  # pnpm-workspace.yaml from here and updates every app/package plus the
+  # shared pnpm-lock.yaml together.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # Minor/patch bumps arrive as one PR per week instead of dozens;
+      # major versions still get their own PR so they can be reviewed alone.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

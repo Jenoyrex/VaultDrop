@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { hashPassword, signAccessToken, verifyPassword } from "@vaultdrop/crypto";
 import type { ServerEnv } from "@vaultdrop/config";
-import type { AuthResponse, UserDTO, VaultPasswordRewrap } from "@vaultdrop/types";
+import type { UserDTO, VaultPasswordRewrap } from "@vaultdrop/types";
 import { AppError } from "../utils/app-error.js";
 
 function toUserDTO(user: { id: string; username: string; createdAt: Date }): UserDTO {
@@ -12,13 +12,19 @@ function toUserDTO(user: { id: string; username: string; createdAt: Date }): Use
   };
 }
 
+/** Internal result: the route puts `token` in an httpOnly cookie and only `user` in the body. */
+export interface IssuedSession {
+  user: UserDTO;
+  token: string;
+}
+
 export class AuthService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly env: ServerEnv
   ) {}
 
-  async register(username: string, password: string): Promise<AuthResponse> {
+  async register(username: string, password: string): Promise<IssuedSession> {
     const existing = await this.prisma.user.findUnique({ where: { username } });
     if (existing) {
       throw AppError.conflict("Username is already taken");
@@ -29,17 +35,10 @@ export class AuthService {
       data: { username, passwordHash }
     });
 
-    const accessToken = signAccessToken({
-      userId: user.id,
-      username: user.username,
-      secret: this.env.JWT_SECRET,
-      expiresIn: this.env.JWT_EXPIRES_IN
-    });
-
-    return { user: toUserDTO(user), accessToken };
+    return { user: toUserDTO(user), token: this.signFor(user) };
   }
 
-  async login(username: string, password: string): Promise<AuthResponse> {
+  async login(username: string, password: string): Promise<IssuedSession> {
     const user = await this.prisma.user.findUnique({ where: { username } });
     if (!user) {
       throw AppError.unauthorized("Invalid username or password");
@@ -50,14 +49,29 @@ export class AuthService {
       throw AppError.unauthorized("Invalid username or password");
     }
 
-    const accessToken = signAccessToken({
+    return { user: toUserDTO(user), token: this.signFor(user) };
+  }
+
+  private signFor(user: { id: string; username: string; tokenVersion: number }): string {
+    return signAccessToken({
       userId: user.id,
       username: user.username,
+      tokenVersion: user.tokenVersion,
       secret: this.env.JWT_SECRET,
       expiresIn: this.env.JWT_EXPIRES_IN
     });
+  }
 
-    return { user: toUserDTO(user), accessToken };
+  /**
+   * Server-side logout: bumping `tokenVersion` makes every token issued
+   * to this user so far fail the auth middleware's version check, on every
+   * device. (Revoking one device at a time would need a session table.)
+   */
+  async revokeAllSessions(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } }
+    });
   }
 
   async getCurrentUser(userId: string): Promise<UserDTO> {
@@ -110,6 +124,10 @@ export class AuthService {
 
     const newPasswordHash = await hashPassword(newPassword);
 
+    // The password hash and tokenVersion change in the same update, so
+    // every other session is revoked atomically with the password change.
+    // The route then calls issueSessionToken to keep the requesting device
+    // signed in at the new version.
     await this.prisma.$transaction(async (tx) => {
       // Live re-read, inside the transaction — not trusted from an
       // earlier client-side snapshot — of exactly which vaults this
@@ -142,7 +160,7 @@ export class AuthService {
 
       await tx.user.update({
         where: { id: userId },
-        data: { passwordHash: newPasswordHash }
+        data: { passwordHash: newPasswordHash, tokenVersion: { increment: 1 } }
       });
 
       for (const rewrap of vaultRewraps) {
@@ -161,5 +179,14 @@ export class AuthService {
         });
       }
     });
+  }
+
+  /** Signs a token at the user's current tokenVersion (read fresh from the DB). */
+  async issueSessionToken(userId: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw AppError.unauthorized();
+    }
+    return this.signFor(user);
   }
 }

@@ -34,7 +34,10 @@ const serverEnvSchema = z
     JWT_EXPIRES_IN: z.string().default("15m"),
     STORAGE_DRIVER: z.enum(["local", "cloud"]).default("local"),
     STORAGE_ROOT: z.string().default("./storage"),
-    CORS_ORIGIN: z.string().default("http://localhost:3000"),
+    /** The single web origin allowed to make credentialed requests. Must be
+     * a real URL — a wildcard ("*") is rejected here because the API uses
+     * cookie credentials and also checks Origin against this value. */
+    CORS_ORIGIN: z.string().url().default("http://localhost:3000"),
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
     /** Sliding window for auth-route rate limiting, in ms. Optional — the
      * rate limiter falls back to its own built-in default when unset, so
@@ -73,9 +76,29 @@ const serverEnvSchema = z
      * `true` value, which `express-rate-limit` itself refuses to key on
      * since it makes the limiter trivially bypassable via a spoofed header.
      */
-    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional()
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional(),
+    /** Temporary deploy-verification switch. "1" mounts the authenticated
+     * GET /debug/ip endpoint (reached as /api/debug/ip through Netlify),
+     * which echoes req.ip and the raw X-Forwarded-For so the operator can
+     * confirm TRUST_PROXY_HOPS. Anything else (the default) leaves the
+     * route unmounted, so it 404s. Turn it off again after verifying. */
+    DEBUG_IP_ECHO: z.enum(["0", "1"]).optional(),
+    /** Shared secret Netlify uses to sign proxied requests (the `signed`
+     * option in apps/web/netlify.toml, sent as the x-nf-sign header). When
+     * set, the API rejects every request without a valid signature except
+     * /health, so the public Render URL cannot be used to bypass the proxy
+     * (and with it the X-Forwarded-For hop count). Required in production. */
+    API_PROXY_SECRET: z.string().min(32, "API_PROXY_SECRET must be at least 32 characters").optional()
   })
   .superRefine((data, ctx) => {
+    if (data.NODE_ENV === "production" && !data.API_PROXY_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["API_PROXY_SECRET"],
+        message:
+          "API_PROXY_SECRET is required in production: without it the API accepts requests that bypass the Netlify proxy"
+      });
+    }
     if (data.NODE_ENV === "production" && isUnsafeJwtSecret(data.JWT_SECRET)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

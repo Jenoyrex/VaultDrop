@@ -1,9 +1,12 @@
 # Security Policy
 
-VaultDrop is a personal project built around a zero-knowledge encryption
-model: file contents, file/folder names, and every encryption key are
-handled client-side, and the server is designed to never receive them in a
-usable form. This document explains how to report a security issue, what
+VaultDrop is a personal project built around client-side encryption: file
+contents, file/folder names, and the vault and file keys are encrypted in
+the browser, and the server is designed to never receive them in a usable
+form. This is "zero-knowledge" only with the caveats in
+[`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) — most importantly, the
+server receives the account password at login, and it serves the
+JavaScript that does the encryption. This document explains how to report a security issue, what
 to expect, and — just as importantly — what VaultDrop's security model
 does *not* cover.
 
@@ -18,7 +21,7 @@ Instead, report it privately using one of the following:
    [Security tab of this repository](https://github.com/Jenoyrex/VaultDrop/security)
    and select **"Report a vulnerability"**. This opens a private draft
    security advisory visible only to the maintainer.
-2. **Alternative:** email **jenoyrex95@gmail.com** with a clear subject
+2. **Alternative:** email **<SECURITY_CONTACT>** with a clear subject
    line (e.g. `VaultDrop security report: <short description>`).
 
 ### What to include in a report
@@ -63,8 +66,11 @@ Flow Works" sections for the full picture. In short: the vault's Data
 Encryption Key (DEK) is generated in the browser and only ever leaves the
 browser wrapped — once by a password-derived key, and once by a
 one-time recovery key — using AES-256-GCM. The server stores ciphertext,
-wrapped keys, and KDF parameters; it never receives a usable password,
-key-encryption-key, DEK, or recovery key.
+wrapped keys, and KDF parameters; it never receives the
+key-encryption-key, DEK, or recovery key. It **does** receive the account
+password over TLS at login and password change (it is hashed with
+Argon2id and not stored), and the KEK is derived from that same password —
+see `docs/THREAT_MODEL.md` for what that implies.
 
 **If you lose both your account password and your recovery key, your
 encrypted vault data is permanently unrecoverable.** This is a deliberate
@@ -90,18 +96,24 @@ security posture:
   documented limits correctly; if the API is ever horizontally scaled to
   multiple instances without a shared store (e.g. Redis), each instance
   would enforce its own independent budget.
-- **No session revocation.** Sessions are stateless JWTs with a short
-  expiry (15 minutes by default). There is no server-side token blocklist,
-  so a compromised token remains valid until it expires; logout is a
-  client-side token discard.
+- **Session revocation is per user, not per device.** Session tokens are
+  short-lived JWTs (15 minutes by default) in an httpOnly cookie. Logout
+  and password change increment `User.tokenVersion`, which revokes every
+  outstanding token for that user on all devices; there is no way to
+  revoke one device's session alone.
 - **Server-visible metadata.** Account usernames, vault names, file sizes,
   MIME types, folder structure, and timestamps are not encrypted — only
   file contents, file/folder names, and key material are. See the
   README's privacy model section for the full list of what is and isn't
   protected.
-- **Dependency scanning is manual, not continuous.** Production
-  dependencies are periodically audited with `pnpm audit`; there is no
-  automated, scheduled dependency-vulnerability scan wired into CI yet.
+- **Dependency scanning covers production dependencies only as a gate.**
+  CI fails on any high/critical advisory in production dependencies
+  (`pnpm audit --prod --audit-level=high`). Dependabot opens weekly update
+  PRs and CodeQL scans the code on every PR and weekly. Dev-only test
+  tooling is not gated: at the time of writing `pnpm audit` still reports
+  advisories in `vitest@2` and its `vite`/`tinypool` dependencies,
+  which need a major upgrade to vitest 3 (left for a separate change).
+  These run only on developer machines and CI, never in the deployed app.
 
 If you find a gap not listed here, please report it using the process
 above.

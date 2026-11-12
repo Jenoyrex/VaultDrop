@@ -11,29 +11,23 @@ import { useAuth } from "@/components/providers/auth-provider";
 import CreateVaultDialog from "@/components/vault/CreateVaultDialog";
 
 export default function DashboardPage() {
-  const { user, accessToken } = useAuth();
+  const { user } = useAuth();
 
   const [vaults, setVaults] = useState<VaultDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   const loadVaults = useCallback(async () => {
-    if (!accessToken) {
-      setVaults([]);
-      setLoading(false);
-      return;
-    }
-
     try {
       setLoading(true);
-      const response = await vaultApi.list(accessToken);
+      const response = await vaultApi.list();
       setVaults(response.vaults);
     } catch (error) {
       console.error("Failed to load vaults:", error);
     } finally {
       setLoading(false);
     }
-  }, [accessToken]);
+  }, []);
 
   useEffect(() => {
     loadVaults();

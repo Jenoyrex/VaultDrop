@@ -10,7 +10,10 @@ import { createFolderRouter } from "./routes/folder.routes.js";
 import { createFileRouter } from "./routes/file.routes.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { requestLogger } from "./middleware/request-logger.js";
-import { createApiRateLimiters } from "./middleware/rate-limit.js";
+import { createApiRateLimiters, createIpFloodLimiter } from "./middleware/rate-limit.js";
+import { createOriginCheck } from "./middleware/origin-check.js";
+import { createAuthMiddleware } from "./middleware/auth.js";
+import { createProxySignatureCheck } from "./middleware/proxy-signature.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
@@ -26,7 +29,22 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // including body parsing and everything downstream.
   app.use(requestLogger);
   app.use(helmet());
+  // First real gate: in production only requests that came through the
+  // Netlify proxy (signed x-nf-sign header) get any further. This is what
+  // makes TRUST_PROXY_HOPS safe: the hop count only has to be right for
+  // the one path that is allowed in.
+  app.use(createProxySignatureCheck(env));
+  // Exactly one allowed origin (validated as a URL at boot, so never "*"),
+  // with credentials so the dev setup (web :3000 -> API :4000) can send the
+  // session cookie. In production the browser reaches the API same-origin
+  // through the /api proxy and CORS is not involved at all.
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  // Before body parsing and every router, so a forged cross-origin
+  // request is rejected before any work is done on it.
+  app.use(createOriginCheck(env));
+  // Per-IP flood ceiling ahead of every router, so the session check's
+  // database lookup in requireAuth is never reachable without a limiter.
+  app.use(createIpFloodLimiter(env));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => {
@@ -38,6 +56,15 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // /folders, and /files route combined — not one independent budget per
   // router (which would silently triple the effective ceiling).
   const { generalApiLimiter, uploadLimiter, downloadLimiter } = createApiRateLimiters(env);
+
+  // Temporary: lets the operator confirm TRUST_PROXY_HOPS after a deploy
+  // (see docs/THREAT_MODEL.md). Not mounted at all unless DEBUG_IP_ECHO=1.
+  // Authenticated so it is not an open header-reflection endpoint.
+  if (env.DEBUG_IP_ECHO === "1") {
+    app.get("/debug/ip", createAuthMiddleware(env, prisma), (req, res) => {
+      res.status(200).json({ ip: req.ip, ips: req.ips, xff: req.get("x-forwarded-for") ?? null });
+    });
+  }
 
   app.use("/auth", createAuthRouter(prisma, env));
   app.use("/vaults", createVaultRouter(prisma, env, generalApiLimiter));

@@ -9,6 +9,7 @@ function baseEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     DATABASE_URL: "postgresql://unused:unused@localhost:5432/unused",
     JWT_SECRET: REAL_RANDOM_SECRET,
+    API_PROXY_SECRET: "proxy-secret-value-that-is-32-chars-long",
     ...overrides
   };
 }
@@ -91,5 +92,16 @@ describe("loadServerEnv", () => {
       baseEnv({ NODE_ENV: "production", TRUST_PROXY_HOPS: "1" })
     );
     expect(env.TRUST_PROXY_HOPS).toBe(1);
+  });
+  it("refuses to boot in production without API_PROXY_SECRET", async () => {
+    const loadServerEnv = await freshLoadServerEnv();
+    const { API_PROXY_SECRET: _unused, ...withoutSecret } = baseEnv({ NODE_ENV: "production" });
+    expect(() => loadServerEnv(withoutSecret)).toThrow(/API_PROXY_SECRET/);
+  });
+
+  it("does not require API_PROXY_SECRET outside production", async () => {
+    const loadServerEnv = await freshLoadServerEnv();
+    const { API_PROXY_SECRET: _unused, ...withoutSecret } = baseEnv({ NODE_ENV: "development" });
+    expect(loadServerEnv(withoutSecret).API_PROXY_SECRET).toBeUndefined();
   });
 });

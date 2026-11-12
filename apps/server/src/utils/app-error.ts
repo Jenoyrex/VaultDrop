@@ -20,8 +20,8 @@ export class AppError extends Error {
   }
 
   /**
-   * Specifically for "your bearer token itself is missing, malformed, or
-   * expired" — distinct from `unauthorized()`, which also covers ordinary
+   * Specifically for "your session token itself is missing, malformed,
+   * expired, or revoked" — distinct from `unauthorized()`, which also covers ordinary
    * wrong-credential responses (e.g. a bad login password, or a wrong
    * current password during account password change). The client uses
    * this distinct code to trigger a global session-expired flow; it must
@@ -34,6 +34,14 @@ export class AppError extends Error {
 
   static forbidden(message = "Forbidden"): AppError {
     return new AppError(403, "FORBIDDEN", message);
+  }
+
+  static proxySignatureRequired(): AppError {
+    return new AppError(403, "PROXY_SIGNATURE_REQUIRED", "Requests must come through the web app");
+  }
+
+  static csrfRejected(): AppError {
+    return new AppError(403, "CSRF_REJECTED", "Request origin is not allowed");
   }
 
   static notFound(message = "Not found"): AppError {

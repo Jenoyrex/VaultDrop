@@ -59,6 +59,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -99,7 +100,7 @@ describe("file download/preview routes", () => {
 
     const response = await request(app)
       .post(`/files/upload-encrypted?${params.toString()}`)
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .set("Content-Type", "application/octet-stream")
       .send(wireBytes);
 
@@ -134,7 +135,7 @@ describe("file download/preview routes", () => {
 
       const response = await request(app)
         .get(`/files/${uploaded.id}/download`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .buffer(true)
         .parse((res, callback) => {
           const chunks: Buffer[] = [];
@@ -168,7 +169,7 @@ describe("file download/preview routes", () => {
 
       const uploadResponse = await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", plaintext, "hello.txt");
 
       expect(uploadResponse.status).toBe(201);
@@ -176,7 +177,7 @@ describe("file download/preview routes", () => {
 
       const response = await request(app)
         .get(`/files/${fileId}/download`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("text/plain");
@@ -211,7 +212,7 @@ describe("file download/preview routes", () => {
 
       const response = await request(app)
         .get(`/files/${uploaded.id}/preview`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .buffer(true)
         .parse((res, callback) => {
           const chunks: Buffer[] = [];
@@ -237,7 +238,7 @@ describe("file download/preview routes", () => {
 
       const uploadResponse = await request(app)
         .post(`/files/upload?vaultId=${vaultId}`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .attach("file", plaintext, {
           filename: "data.json",
           contentType: "application/json"
@@ -248,7 +249,7 @@ describe("file download/preview routes", () => {
 
       const response = await request(app)
         .get(`/files/${fileId}/preview`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("application/json");

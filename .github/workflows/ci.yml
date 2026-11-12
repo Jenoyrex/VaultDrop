@@ -41,6 +41,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Fails the build on any known high/critical advisory in a dependency
+      # that ships (apps' runtime dependencies). Dev-only tooling (vitest,
+      # vite, etc.) is excluded with --prod: it never runs in production,
+      # and its advisories are tracked through Dependabot PRs instead. See
+      # SECURITY.md "Dependency scanning" for what is currently excluded.
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=high
+
       # Generates @prisma/client's schema-specific types. Required before
       # typecheck/build/test — nothing else in `pnpm install` does this,
       # and it needs no database connection (only network access to fetch

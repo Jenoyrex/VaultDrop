@@ -41,13 +41,21 @@ const unusedStorage: StorageAdapter = {
   }
 };
 
+/** The session token now arrives only via Set-Cookie, never in the body. */
+function sessionTokenFrom(res: { headers: Record<string, unknown> }): string {
+  const cookies = (res.headers["set-cookie"] as string[] | undefined) ?? [];
+  const match = cookies.map((c) => /^vaultdrop_session=([^;]+)/.exec(c)).find(Boolean);
+  if (!match?.[1]) throw new Error("no session cookie set");
+  return match[1];
+}
+
 function makeApp(env: ServerEnv = BASE_ENV) {
   const { prisma } = createFakePrisma();
   return createApp(prisma, env, unusedStorage);
 }
 
 describe("POST /auth/register", () => {
-  it("creates a user and returns an access token", async () => {
+  it("creates a user and sets a session cookie", async () => {
     const app = makeApp();
     const username = `user-${randomUUID().slice(0, 8)}`;
 
@@ -57,7 +65,7 @@ describe("POST /auth/register", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.user.username).toBe(username);
-    expect(typeof res.body.accessToken).toBe("string");
+    expect(sessionTokenFrom(res).split(".")).toHaveLength(3);
     expect(res.body.user).not.toHaveProperty("passwordHash");
   });
 
@@ -99,7 +107,7 @@ describe("POST /auth/login", () => {
     const res = await request(app).post("/auth/login").send({ username, password });
 
     expect(res.status).toBe(200);
-    expect(typeof res.body.accessToken).toBe("string");
+    expect(sessionTokenFrom(res).split(".")).toHaveLength(3);
   });
 
   it("rejects the wrong password with a generic 401", async () => {
@@ -148,7 +156,7 @@ describe("GET /auth/me", () => {
 
     const res = await request(app)
       .get("/auth/me")
-      .set("Authorization", `Bearer ${registerRes.body.accessToken}`);
+      .set("Cookie", `vaultdrop_session=${sessionTokenFrom(registerRes)}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(200);
     expect(res.body.user.username).toBe(username);
@@ -167,7 +175,7 @@ describe("GET /auth/me", () => {
     const app = makeApp();
     const res = await request(app)
       .get("/auth/me")
-      .set("Authorization", "Bearer not-a-real-token");
+      .set("Cookie", "vaultdrop_session=not-a-real-token");
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe("INVALID_TOKEN");
   });
@@ -250,7 +258,7 @@ describe("request logging never leaks secrets", () => {
     expect(allLoggedText).not.toContain(password);
   });
 
-  it("never logs the issued access token / Authorization header", async () => {
+  it("never logs the issued session token / Cookie header", async () => {
     const app = makeApp();
     const username = `user-${randomUUID().slice(0, 8)}`;
     const password = "correct-horse-battery";
@@ -260,11 +268,11 @@ describe("request logging never leaks secrets", () => {
       .send({ username, password })
       .expect(201);
 
-    const token: string = registerRes.body.accessToken;
+    const token = sessionTokenFrom(registerRes);
 
     await request(app)
       .get("/auth/me")
-      .set("Authorization", `Bearer ${token}`)
+      .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
       .expect(200);
 
     const allLoggedText = logSpy.mock.calls

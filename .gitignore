@@ -8,3 +8,6 @@ dist
 apps/server/storage
 .DS_Store
 *.tsbuildinfo
+
+# Personal interview-prep notes (never committed)
+STUDY_NOTES.md

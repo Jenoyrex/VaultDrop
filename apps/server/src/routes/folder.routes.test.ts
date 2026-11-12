@@ -5,7 +5,7 @@ import type { ServerEnv } from "@vaultdrop/config";
 import type { StorageAdapter } from "@vaultdrop/types";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 /**
  * Cross-user authorization (IDOR) regression tests for the folder routes.
@@ -57,6 +57,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -68,14 +69,14 @@ async function setupUserAWithFolder() {
   const vaultId = randomUUID();
   const { prisma, folders } = createFakePrisma([
     { id: vaultId, ownerId: userA, name: "User A's Vault" }
-  ]);
+  ], [testUser(userB)]);
   const app = createApp(prisma, TEST_ENV, unusedStorage);
   const tokenA = bearerTokenFor(userA);
   const tokenB = bearerTokenFor(userB);
 
   const createRes = await request(app)
     .post("/folders")
-    .set("Authorization", `Bearer ${tokenA}`)
+    .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000")
     .send({ vaultId, parentId: null, name: "User A's Folder" });
   expect(createRes.status).toBe(201);
   const folderId = createRes.body.folder.id as string;
@@ -90,7 +91,7 @@ describe("cross-user authorization on /folders", () => {
 
     const res = await request(app)
       .post("/folders")
-      .set("Authorization", `Bearer ${tokenB}`)
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000")
       .send({ vaultId, parentId: null, name: "Intrusion" });
 
     expect(res.status).toBe(403);
@@ -103,7 +104,7 @@ describe("cross-user authorization on /folders", () => {
 
     const res = await request(app)
       .get(`/folders/contents?vaultId=${vaultId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -114,7 +115,7 @@ describe("cross-user authorization on /folders", () => {
 
     const res = await request(app)
       .get(`/folders/search?vaultId=${vaultId}&query=folder`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -125,7 +126,7 @@ describe("cross-user authorization on /folders", () => {
 
     const res = await request(app)
       .patch(`/folders/${folderId}`)
-      .set("Authorization", `Bearer ${tokenB}`)
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000")
       .send({ name: "Renamed By Attacker" });
 
     expect(res.status).toBe(403);
@@ -140,7 +141,7 @@ describe("cross-user authorization on /folders", () => {
 
     const res = await request(app)
       .delete(`/folders/${folderId}`)
-      .set("Authorization", `Bearer ${tokenB}`);
+      .set("Cookie", `vaultdrop_session=${tokenB}`).set("Origin", "http://localhost:3000");
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
@@ -152,13 +153,13 @@ describe("cross-user authorization on /folders", () => {
 
     const renameRes = await request(app)
       .patch(`/folders/${folderId}`)
-      .set("Authorization", `Bearer ${tokenA}`)
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000")
       .send({ name: "Renamed By Owner" });
     expect(renameRes.status).toBe(200);
 
     const deleteRes = await request(app)
       .delete(`/folders/${folderId}`)
-      .set("Authorization", `Bearer ${tokenA}`);
+      .set("Cookie", `vaultdrop_session=${tokenA}`).set("Origin", "http://localhost:3000");
     expect(deleteRes.status).toBe(204);
     expect(folders.some((f) => f.id === folderId)).toBe(false);
   });

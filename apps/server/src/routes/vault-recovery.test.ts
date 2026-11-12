@@ -8,7 +8,7 @@ import type { ServerEnv } from "@vaultdrop/config";
 import { signAccessToken } from "@vaultdrop/crypto";
 import { createApp } from "../app.js";
 import { LocalStorageAdapter } from "../storage/local-storage-adapter.js";
-import { createFakePrisma } from "../test-support/fake-prisma.js";
+import { createFakePrisma, testUser } from "../test-support/fake-prisma.js";
 
 const TEST_ENV: ServerEnv = {
   NODE_ENV: "test",
@@ -26,6 +26,7 @@ function bearerTokenFor(ownerId: string): string {
   return signAccessToken({
     userId: ownerId,
     username: "tester",
+    tokenVersion: 0,
     secret: TEST_ENV.JWT_SECRET,
     expiresIn: TEST_ENV.JWT_EXPIRES_IN
   });
@@ -67,7 +68,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .put(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           recoveryWrappedDekCiphertext: "recovery-ciphertext-1",
           recoveryWrappedDekIv: "recovery-iv-1"
@@ -99,7 +100,7 @@ describe("vault recovery routes", () => {
 
       await request(app)
         .put(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           recoveryWrappedDekCiphertext: "new-recovery-ciphertext",
           recoveryWrappedDekIv: "new-recovery-iv"
@@ -122,7 +123,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .put(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ recoveryWrappedDekCiphertext: "x", recoveryWrappedDekIv: "y" });
 
       expect(res.status).toBe(400);
@@ -132,13 +133,13 @@ describe("vault recovery routes", () => {
       const ownerId = randomUUID();
       const otherUserId = randomUUID();
       const vaultId = randomUUID();
-      const { prisma } = createFakePrisma([encryptedVaultSeed(vaultId, ownerId)]);
+      const { prisma } = createFakePrisma([encryptedVaultSeed(vaultId, ownerId)], [testUser(otherUserId)]);
       const app = createApp(prisma, TEST_ENV, new LocalStorageAdapter(tmpDir));
       const token = bearerTokenFor(otherUserId);
 
       const res = await request(app)
         .put(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({ recoveryWrappedDekCiphertext: "x", recoveryWrappedDekIv: "y" });
 
       expect(res.status).toBe(403);
@@ -155,7 +156,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .get(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe("RECOVERY_NOT_CONFIGURED");
@@ -169,14 +170,15 @@ describe("vault recovery routes", () => {
         recoveryWrappedDekCiphertext: "recovery-ciphertext",
         recoveryWrappedDekIv: "recovery-iv"
       };
-      const { prisma } = createFakePrisma([seed]);
+      const strangerId = randomUUID();
+      const { prisma } = createFakePrisma([seed], [testUser(strangerId)]);
       const app = createApp(prisma, TEST_ENV, new LocalStorageAdapter(tmpDir));
       const ownerToken = bearerTokenFor(ownerId);
-      const strangerToken = bearerTokenFor(randomUUID());
+      const strangerToken = bearerTokenFor(strangerId);
 
       const ownerRes = await request(app)
         .get(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${ownerToken}`);
+        .set("Cookie", `vaultdrop_session=${ownerToken}`).set("Origin", "http://localhost:3000");
 
       expect(ownerRes.status).toBe(200);
       expect(ownerRes.body).toEqual({
@@ -186,7 +188,7 @@ describe("vault recovery routes", () => {
 
       const strangerRes = await request(app)
         .get(`/vaults/${vaultId}/recovery-key`)
-        .set("Authorization", `Bearer ${strangerToken}`);
+        .set("Cookie", `vaultdrop_session=${strangerToken}`).set("Origin", "http://localhost:3000");
 
       expect(strangerRes.status).toBe(403);
     });
@@ -205,7 +207,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .get(`/vaults/${vaultId}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000");
 
       expect(res.status).toBe(200);
       expect(res.body.vault.hasRecoveryKey).toBe(true);
@@ -229,7 +231,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .put(`/vaults/${vaultId}/encryption`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           encryptionVersion: 1,
           kekSalt: "new-kek-salt",
@@ -258,7 +260,7 @@ describe("vault recovery routes", () => {
 
       const res = await request(app)
         .put(`/vaults/${vaultId}/encryption`)
-        .set("Authorization", `Bearer ${token}`)
+        .set("Cookie", `vaultdrop_session=${token}`).set("Origin", "http://localhost:3000")
         .send({
           encryptionVersion: 1,
           kekSalt: "s",

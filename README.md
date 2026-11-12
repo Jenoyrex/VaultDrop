@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Jenoyrex/VaultDrop/actions/workflows/ci.yml/badge.svg)](https://github.com/Jenoyrex/VaultDrop/actions/workflows/ci.yml)
 
-A private file vault with client-side encryption — your password never leaves your browser, and the server never sees the keys that protect your files.
+A private file vault with client-side encryption: files and file/folder names are encrypted in your browser, and the server never receives the keys that protect them. (It does receive your account password at login — see [the two password mechanisms](#two-password-mechanisms) and the [threat model](./docs/THREAT_MODEL.md).)
 
 ### 🔗 [Live Demo →](https://vaultdrop95.netlify.app)
 
@@ -14,7 +14,7 @@ Deployed and usable end-to-end today: create an account, create an encrypted vau
 
 ## Overview
 
-VaultDrop is a full-stack file storage application built around a simple idea: the server should be able to store and serve your files without ever being able to read them. Vault contents are encrypted in the browser before upload using keys derived from your password. The server stores ciphertext, not plaintext, and never receives the key material needed to decrypt it.
+VaultDrop is a full-stack file storage application built around a simple idea: the server should be able to store and serve your files without ever being able to read them. Vault contents are encrypted in the browser before upload using keys derived from your password. The server stores ciphertext, not plaintext, and never receives the derived keys. Because the same password is also your login password, this protects against a database leak or a curious storage provider, but not against a fully malicious server — the [threat model](./docs/THREAT_MODEL.md) spells out exactly where the line is.
 
 It's a monorepo with a Next.js frontend, an Express/Prisma API, PostgreSQL for metadata, and Backblaze B2 (S3-compatible) for encrypted object storage.
 
@@ -59,9 +59,18 @@ Encrypted files within a folder, each shown with size, timestamp, and download/e
 
 ## Why VaultDrop / Privacy Model
 
-Most "secure" file storage products encrypt data at rest on the server — which means the provider still holds the keys and could, in principle, read your files. VaultDrop's encryption model is different: keys are derived and used entirely client-side, so the server is never in possession of anything it could use to decrypt file contents or file/folder names.
+Most "secure" file storage products encrypt data at rest on the server — which means the provider still holds the keys and could, in principle, read your files. VaultDrop's encryption model is different: keys are derived and used entirely client-side, and what the server stores (ciphertext, wrapped keys, KDF parameters, an Argon2id hash) is not enough to decrypt file contents or file/folder names.
 
-**Protected (never leaves the browser in usable form):** file contents, file and folder names, and every encryption key involved.
+### Two password mechanisms
+
+One account password feeds two separate mechanisms:
+
+- **Argon2id (server) hashes the login password.** The browser sends the password over TLS to `/auth/login` (and `/auth/register`, `/auth/password`); the API verifies or stores it as an Argon2id hash (19 MiB memory, 2 iterations, parallelism 1)[^argon2].
+- **PBKDF2-SHA256 with 600,000 iterations (browser) derives the key-encryption key (KEK)**[^pbkdf2] that wraps each vault's data key. The server never sees the encryption password-derived key.
+
+The honest caveat: because both mechanisms use the **same** password, the server does see the input to the KEK derivation every time you log in. A server that is compromised *while you log in* (or that serves modified JavaScript) could capture the password and derive the KEK. A database leak alone cannot: it only contains the Argon2id hash and the wrapped keys. See [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
+
+**Protected (never sent to the server in usable form):** file contents, file and folder names, the vault data keys, per-file keys, the KEK, and the recovery key.
 
 **Server-visible by design (not encrypted):** account username, vault name, file size and MIME type, folder structure, timestamps, and the storage location of the ciphertext. The application needs this metadata to list, sort, and serve files without ever touching their contents — VaultDrop does not claim full end-to-end encryption of every field in the system, only of file contents, names, and keys.
 
@@ -75,7 +84,7 @@ Encryption is **mandatory for every new vault** — the vault-creation API rejec
 - **Recovery key** for regaining vault access without a password reset, generated once at vault creation
 - **Drag-and-drop file upload** and vault/folder browsing in the dashboard
 - **Password strength feedback** during vault creation
-- **Argon2id password hashing** with **JWT bearer** session auth
+- **Argon2id password hashing**, with sessions as short-lived JWTs in an **httpOnly, SameSite=Lax cookie** (never readable by page JavaScript) and server-side revocation
 - **Nested folders** with per-user vault isolation
 - **Pluggable storage layer**: local filesystem for development, Backblaze B2 (S3-compatible) in production
 - **Rate limiting** on auth and API routes, and **security headers/CSP** (Helmet, nonce-based Content-Security-Policy)
@@ -84,14 +93,14 @@ Encryption is **mandatory for every new vault** — the vault-creation API rejec
 
 ## How the Encryption Flow Works
 
-1. **Vault creation** — The browser generates a random vault Data Encryption Key (DEK). Your password is run through PBKDF2-SHA256 to derive a Key-Encryption-Key (KEK), which wraps (encrypts) the DEK with AES-256-GCM. A recovery key is also generated and used to wrap a second copy of the DEK. The server receives and stores only the wrapped (encrypted) DEK, the KEK's salt/iteration parameters, and the recovery-wrapped DEK — never the password, the KEK, the DEK, or the recovery key itself.
+1. **Vault creation** — The browser generates a random vault Data Encryption Key (DEK). Your password is run through PBKDF2-SHA256 to derive a Key-Encryption-Key (KEK), which wraps (encrypts) the DEK with AES-256-GCM. A recovery key is also generated and used to wrap a second copy of the DEK. The server receives and stores only the wrapped (encrypted) DEK, the KEK's salt/iteration parameters, and the recovery-wrapped DEK — never the KEK, the DEK, or the recovery key itself. (Before deriving the KEK, the dialog confirms the password by calling `/auth/login`, so the password itself does reach the server, exactly as at login.)
 2. **Unlocking a vault** — Your password is re-derived into the same KEK (using the stored salt/iterations) and used to unwrap the stored DEK, entirely in-browser.
 3. **Uploading a file** — The browser generates a random per-file content key, encrypts the file (in chunks, via AES-256-GCM) with it, and wraps that file key with the vault DEK. The server receives only ciphertext plus the wrapped file key — it cannot decrypt either.
 4. **File and folder names** — Encrypted directly with the vault DEK before being sent to the server; the server stores only the ciphertext.
 5. **Downloading** — The server returns the encrypted bytes and the wrapped file key; the browser unwraps the file key with the (already-unlocked) vault DEK and decrypts the file locally.
 6. **Recovery** — If the password is lost, the recovery key (shown once at vault creation, meant to be stored offline) can unwrap the DEK independently of the password, restoring access without the server ever being involved in the key material.
 
-All cryptographic operations use the browser's native Web Crypto API (`crypto.subtle`) — no key material is ever sent to the server in a usable form.
+All cryptographic operations use the browser's native Web Crypto API (`crypto.subtle`). No derived or generated key is ever sent to the server in a usable form; the password is, at login, as described above.
 
 ---
 
@@ -117,25 +126,25 @@ flowchart LR
     end
 
     UI -->|"plaintext UI, encrypted payloads"| Crypto
-    Crypto -->|"HTTPS + JWT"| API
+    Crypto -->|"HTTPS /api proxy + httpOnly session cookie"| API
     API -->|"PostgreSQL application data"| DB
     API -->|"ciphertext (ID/S3 API)"| Storage
 ```
 
-The frontend (Netlify) and API (Render) are deployed independently and communicate over HTTPS. The API is the only component with credentials for PostgreSQL (Neon) and Backblaze B2; it never has access to a user's password or any derived encryption key.
+The frontend (Netlify) and API (Render) are deployed independently. In production the browser calls the API at `/api/*` on the frontend's own origin and Netlify proxies those requests to Render, so the session cookie is first-party (see [`docs/design-decisions.md`](./docs/design-decisions.md)). The API is the only component with credentials for PostgreSQL (Neon) and Backblaze B2. It receives the login password (to verify it against the Argon2id hash) but never any derived encryption key.
 
 ---
 
 ## Tech Stack
 
 **Frontend**
-- Next.js 14 (App Router), React 18, TypeScript
+- Next.js 15 (App Router), React 18, TypeScript
 - Tailwind CSS, Radix UI primitives, Framer Motion
 
 **Backend**
 - Express, TypeScript
 - Prisma ORM
-- Argon2id (password hashing), JWT (session auth)
+- Argon2id (password hashing), JWT in an httpOnly cookie (session auth)
 - Zod (request validation)
 
 **Data & Storage**
@@ -221,10 +230,14 @@ Both apps ship a `.env.example` documenting every variable they read (`apps/serv
 - `DATABASE_URL` / `DIRECT_URL` — pooled and direct PostgreSQL connection strings
 - `JWT_SECRET` — must be changed from the placeholder before any production deploy (rejected at boot otherwise)
 - `STORAGE_DRIVER` — `local` or `cloud`; `CLOUD_STORAGE_*` variables configure the S3-compatible endpoint (Backblaze B2 in production)
-- `CORS_ORIGIN`, `MAX_UPLOAD_BYTES`, rate-limit tuning variables, `TRUST_PROXY_HOPS`
+- `CORS_ORIGIN` — the exact web origin (a URL, never `*`); also the only origin allowed to make state-changing requests (CSRF check)
+- `TRUST_PROXY_HOPS` — number of proxies in front of the API (expected 2 in production; verify with `DEBUG_IP_ECHO`, see [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md))
+- `API_PROXY_SECRET` — required in production; must match the Netlify variable of the same name used to sign proxied requests. The API rejects unsigned requests (except `/health`)
+- `DEBUG_IP_ECHO` — temporary; `1` enables the authenticated `/api/debug/ip` check, keep it `0` otherwise
+- `MAX_UPLOAD_BYTES`, rate-limit tuning variables
 
 **Web**
-- `NEXT_PUBLIC_API_URL` — base URL of the API
+- `NEXT_PUBLIC_API_URL` — `http://localhost:4000` in local dev; `/api` in production (same-origin proxy defined in `apps/web/netlify.toml`)
 
 No real credentials are committed anywhere in this repository — only `.env.example` templates.
 
@@ -238,9 +251,12 @@ pnpm test        # Vitest across all apps/packages
 pnpm build       # Production build of every app/package
 ```
 
+Current suite: 294 passing tests and 1 skipped (the opt-in live B2 test) across 4 packages — config 10, crypto 6, server 134 + 1 skipped, web 144[^tests].
+
 Test coverage includes, among others:
 - Server-side vault creation, including enforcement of the mandatory encryption envelope on new vaults
 - Auth flows (registration, login, password change, rate limiting)
+- Session cookies: cookie flags, no token in any response body, 401 without the cookie, CSRF Origin/Referer rejection, logout and password-change revocation (`apps/server/src/routes/session-cookie.test.ts`)
 - Encrypted file/folder name handling
 - Upload and download routes
 - Vault recovery
@@ -252,18 +268,21 @@ An opt-in live integration test exercises the real Backblaze B2 bucket (put → 
 RUN_B2_LIVE_TEST=1 pnpm --filter server test cloud-storage-adapter.live
 ```
 
-CI (GitHub Actions) runs typecheck, test, and build on every pull request and every push to `main`, without requiring a database or any external service — the test suite uses an in-memory Prisma stand-in and mocked storage adapters.
+CI (GitHub Actions) runs a production-dependency audit (`pnpm audit --prod --audit-level=high`), typecheck, test, and build on every pull request and every push to `main`, without requiring a database or any external service — the test suite uses an in-memory Prisma stand-in and mocked storage adapters. CodeQL scans the code on every PR and weekly; Dependabot opens weekly dependency update PRs.
 
 ---
 
 ## Security Notes
 
 - **Transport:** HTTPS in production (Netlify + Render)
+- **Sessions:** a JWT (15-minute default expiry[^jwt]) in an httpOnly cookie — `__Host-` prefixed, `Secure`, `SameSite=Lax` in production. Page JavaScript cannot read it, so an XSS bug cannot exfiltrate it (it can still make requests while the page is open). Each token carries the user's `tokenVersion`, checked on every request; logout and password change increment it, revoking all of that user's sessions server-side.
+- **Proxy-only API:** in production the API only accepts requests signed by the Netlify proxy (`x-nf-sign`), so the public Render URL can't be used to bypass the proxy or forge the client IP the rate limiter sees
+- **CSRF:** `SameSite=Lax` plus an Origin/Referer check that rejects state-changing requests from any origin other than `CORS_ORIGIN` (`apps/server/src/middleware/origin-check.ts`)
 - **HTTP hardening:** Helmet security headers, nonce-based Content-Security-Policy
 - **Rate limiting:** separate budgets for auth endpoints and general API/upload/download traffic, keyed per-user where authenticated
 - **Anti-enumeration:** login returns a generic error for both "wrong password" and "no such user"
 
-See [`SECURITY.md`](./SECURITY.md) for the vulnerability reporting process and current known limitations, and [`docs/SECURITY_REVIEW.md`](./docs/SECURITY_REVIEW.md) for a maintainer-performed review of the encryption, authentication, and authorization design, cross-checked against the automated test suite. This reflects the review performed to date, not an independent third-party audit.
+See [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) for what each kind of attacker can and cannot do, [`docs/design-decisions.md`](./docs/design-decisions.md) for why the main security choices were made, [`SECURITY.md`](./SECURITY.md) for the vulnerability reporting process and current known limitations, and [`docs/SECURITY_REVIEW.md`](./docs/SECURITY_REVIEW.md) for a maintainer-performed review of the encryption, authentication, and authorization design, cross-checked against the automated test suite. This reflects the review performed to date, not an independent third-party audit.
 
 ---
 
@@ -278,7 +297,7 @@ VaultDrop runs on real, independently deployed infrastructure:
 | Database | Neon (PostgreSQL) |
 | Object storage | Backblaze B2 |
 
-The full production flow — account creation → login → vault creation → encrypted upload → storage in B2 → download → delete — has been manually verified end-to-end against live infrastructure with a fresh account.
+The full production flow — account creation → login → vault creation → encrypted upload → storage in B2 → download → delete — has been checked manually by the author against the live deployment. That check is manual and not reproducible from this repository; the automated tests use an in-memory database and mocked storage.
 
 ---
 
@@ -286,7 +305,7 @@ The full production flow — account creation → login → vault creation → e
 
 VaultDrop is an actively developed, deployed project, currently in its first production phase. Implemented and live:
 
-- Username/password authentication (Argon2id + JWT)
+- Username/password authentication (Argon2id + JWT in an httpOnly cookie, server-side revocation)
 - Vault creation with mandatory client-side encryption
 - Nested folders
 - Encrypted file upload/download with client-side AES-256-GCM
@@ -305,6 +324,24 @@ The following are planned, not yet implemented:
 
 ---
 
+## How this was built
+
+- Tools used: <FILL IN: e.g. Claude Code for X, Y>
+- What I designed myself: <FILL IN>
+- AI suggestions I rejected and why: <FILL IN>
+- Bugs I found in AI-generated code: <FILL IN>
+
+---
+
 ## License
 
 All rights reserved — see [`LICENSE`](./LICENSE). This repository is shared for portfolio/evaluation purposes; no license to use, copy, modify, or distribute the code is granted.
+
+---
+
+<sub>Where the numbers in this README come from (re-run any of these to check):</sub>
+
+[^argon2]: `grep -n -A4 ARGON2_OPTIONS packages/crypto/src/password.ts` → `memoryCost: 19456` (KiB), `timeCost: 2`, `parallelism: 1`.
+[^pbkdf2]: `grep -n DEFAULT_KDF_ITERATIONS apps/web/src/lib/crypto/kdf.ts` → `600_000`. Stored per vault (`kekIterations`), so existing vaults keep the count they were created with.
+[^jwt]: `grep -n JWT_EXPIRES_IN packages/config/src/server-env.ts` → default `"15m"`.
+[^tests]: `pnpm test` on 2026-11-12, summing each package's `Tests` line: config 10, crypto 6, server 134 passed + 1 skipped, web 144.

@@ -59,6 +59,11 @@ describe("buildCsp", () => {
       expect(csp).toContain(`connect-src 'self' ${API_ORIGIN}`);
     });
 
+    it("uses connect-src 'self' only when the API is reached through the same-origin /api proxy", () => {
+      const csp = buildCsp({ apiOrigin: "", nonce: "n", isProduction: true });
+      expect(csp).toContain("connect-src 'self';");
+    });
+
     it("allows blob: for img-src and frame-src (decrypted image/PDF previews)", () => {
       const csp = buildCsp({ apiOrigin: API_ORIGIN, nonce: "n", isProduction: true });
       expect(csp).toContain(`img-src 'self' blob:`);

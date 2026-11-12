@@ -12,9 +12,12 @@ export interface LoginRequest {
   password: string;
 }
 
+/**
+ * The session token is never in a response body: it travels only in an
+ * httpOnly cookie set by the API, so browser JavaScript cannot read it.
+ */
 export interface AuthResponse {
   user: UserDTO;
-  accessToken: string;
 }
 
 /* ---------------------------------- Vault --------------------------------- */
