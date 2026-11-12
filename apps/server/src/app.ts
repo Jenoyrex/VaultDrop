@@ -12,6 +12,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { requestLogger } from "./middleware/request-logger.js";
 import { createApiRateLimiters, createIpFloodLimiter } from "./middleware/rate-limit.js";
 import { createOriginCheck } from "./middleware/origin-check.js";
+import { createAuthMiddleware } from "./middleware/auth.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
@@ -49,6 +50,15 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // /folders, and /files route combined — not one independent budget per
   // router (which would silently triple the effective ceiling).
   const { generalApiLimiter, uploadLimiter, downloadLimiter } = createApiRateLimiters(env);
+
+  // Temporary: lets the operator confirm TRUST_PROXY_HOPS after a deploy
+  // (see docs/THREAT_MODEL.md). Not mounted at all unless DEBUG_IP_ECHO=1.
+  // Authenticated so it is not an open header-reflection endpoint.
+  if (env.DEBUG_IP_ECHO === "1") {
+    app.get("/debug/ip", createAuthMiddleware(env, prisma), (req, res) => {
+      res.status(200).json({ ip: req.ip, ips: req.ips, xff: req.get("x-forwarded-for") ?? null });
+    });
+  }
 
   app.use("/auth", createAuthRouter(prisma, env));
   app.use("/vaults", createVaultRouter(prisma, env, generalApiLimiter));

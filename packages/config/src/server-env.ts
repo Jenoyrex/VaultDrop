@@ -76,7 +76,13 @@ const serverEnvSchema = z
      * `true` value, which `express-rate-limit` itself refuses to key on
      * since it makes the limiter trivially bypassable via a spoofed header.
      */
-    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional()
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional(),
+    /** Temporary deploy-verification switch. "1" mounts the authenticated
+     * GET /debug/ip endpoint (reached as /api/debug/ip through Netlify),
+     * which echoes req.ip and the raw X-Forwarded-For so the operator can
+     * confirm TRUST_PROXY_HOPS. Anything else (the default) leaves the
+     * route unmounted, so it 404s. Turn it off again after verifying. */
+    DEBUG_IP_ECHO: z.enum(["0", "1"]).optional()
   })
   .superRefine((data, ctx) => {
     if (data.NODE_ENV === "production" && isUnsafeJwtSecret(data.JWT_SECRET)) {
