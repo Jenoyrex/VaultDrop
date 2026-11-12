@@ -13,6 +13,7 @@ import { requestLogger } from "./middleware/request-logger.js";
 import { createApiRateLimiters, createIpFloodLimiter } from "./middleware/rate-limit.js";
 import { createOriginCheck } from "./middleware/origin-check.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
+import { createProxySignatureCheck } from "./middleware/proxy-signature.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
   const app = express();
@@ -28,6 +29,11 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // including body parsing and everything downstream.
   app.use(requestLogger);
   app.use(helmet());
+  // First real gate: in production only requests that came through the
+  // Netlify proxy (signed x-nf-sign header) get any further. This is what
+  // makes TRUST_PROXY_HOPS safe: the hop count only has to be right for
+  // the one path that is allowed in.
+  app.use(createProxySignatureCheck(env));
   // Exactly one allowed origin (validated as a URL at boot, so never "*"),
   // with credentials so the dev setup (web :3000 -> API :4000) can send the
   // session cookie. In production the browser reaches the API same-origin

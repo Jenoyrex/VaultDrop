@@ -29,6 +29,21 @@ export class InvalidTokenError extends Error {
   }
 }
 
+/**
+ * Verifies Netlify's signed-proxy header (x-nf-sign): an HS256 JWS that
+ * Netlify adds to every proxied request when the redirect rule has
+ * `signed = "<ENV VAR>"`. Checks the signature, expiry, and that Netlify
+ * issued it. Returns false instead of throwing.
+ */
+export function isValidNetlifyProxySignature(token: string, secret: string): boolean {
+  try {
+    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"], issuer: "netlify" });
+    return typeof decoded !== "string";
+  } catch {
+    return false;
+  }
+}
+
 export function verifyAccessToken(token: string, secret: string): AccessTokenPayload {
   try {
     // Explicit allow-list rather than relying on jsonwebtoken's own

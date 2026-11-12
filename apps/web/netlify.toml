@@ -8,8 +8,15 @@
 #
 # Requires NEXT_PUBLIC_API_URL=/api in the Netlify build environment.
 # `force = true` makes this rule win over any Next.js route at the same path.
+#
+# `signed` names a Netlify environment variable (scope must include
+# Runtime). Netlify signs every proxied request with it (HS256 JWS in the
+# x-nf-sign header); the API has the same value as API_PROXY_SECRET and, in
+# production, rejects anything unsigned, so the public Render URL cannot be
+# used to bypass this proxy.
 [[redirects]]
   from = "/api/*"
   to = "https://vaultdrop-api-jzrc.onrender.com/:splat"
   status = 200
   force = true
+  signed = "API_PROXY_SECRET"

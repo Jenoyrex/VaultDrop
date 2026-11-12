@@ -36,6 +36,10 @@ export class AppError extends Error {
     return new AppError(403, "FORBIDDEN", message);
   }
 
+  static proxySignatureRequired(): AppError {
+    return new AppError(403, "PROXY_SIGNATURE_REQUIRED", "Requests must come through the web app");
+  }
+
   static csrfRejected(): AppError {
     return new AppError(403, "CSRF_REJECTED", "Request origin is not allowed");
   }

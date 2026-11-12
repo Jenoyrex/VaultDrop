@@ -75,6 +75,9 @@ importers:
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
+      '@types/jsonwebtoken':
+        specifier: ^9.0.7
+        version: 9.0.10
       '@types/mime-types':
         specifier: ^2.1.4
         version: 2.1.4
@@ -87,6 +90,9 @@ importers:
       '@types/supertest':
         specifier: ^6.0.2
         version: 6.0.3
+      jsonwebtoken:
+        specifier: ^9.0.2
+        version: 9.0.3
       prisma:
         specifier: ^5.22.0
         version: 5.22.0

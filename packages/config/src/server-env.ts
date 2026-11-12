@@ -82,9 +82,23 @@ const serverEnvSchema = z
      * which echoes req.ip and the raw X-Forwarded-For so the operator can
      * confirm TRUST_PROXY_HOPS. Anything else (the default) leaves the
      * route unmounted, so it 404s. Turn it off again after verifying. */
-    DEBUG_IP_ECHO: z.enum(["0", "1"]).optional()
+    DEBUG_IP_ECHO: z.enum(["0", "1"]).optional(),
+    /** Shared secret Netlify uses to sign proxied requests (the `signed`
+     * option in apps/web/netlify.toml, sent as the x-nf-sign header). When
+     * set, the API rejects every request without a valid signature except
+     * /health, so the public Render URL cannot be used to bypass the proxy
+     * (and with it the X-Forwarded-For hop count). Required in production. */
+    API_PROXY_SECRET: z.string().min(32, "API_PROXY_SECRET must be at least 32 characters").optional()
   })
   .superRefine((data, ctx) => {
+    if (data.NODE_ENV === "production" && !data.API_PROXY_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["API_PROXY_SECRET"],
+        message:
+          "API_PROXY_SECRET is required in production: without it the API accepts requests that bypass the Netlify proxy"
+      });
+    }
     if (data.NODE_ENV === "production" && isUnsafeJwtSecret(data.JWT_SECRET)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
