@@ -35,8 +35,8 @@ export class ApiError extends Error {
 
 /**
  * Fired whenever `request()` sees a `401 INVALID_TOKEN` response — the
- * server's signal that the bearer token itself is missing, malformed, or
- * expired, as opposed to an ordinary wrong-credential 401 (a bad login
+ * server's signal that the session cookie itself is missing, malformed,
+ * expired, or revoked, as opposed to an ordinary wrong-credential 401 (a bad login
  * password, or a wrong current password during account password change,
  * both of which keep the generic `UNAUTHORIZED` code and never fire this).
  * `AuthProvider` subscribes to this to drive a single, consistent
@@ -111,15 +111,18 @@ function supportsStreamingRequestBody(): boolean {
   return cachedStreamingBodySupport;
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit & { token?: string | null }
-): Promise<T> {
-  const headers = new Headers(init?.headers);
+/**
+ * Every API call goes through `apiFetch`: `credentials: "include"` makes
+ * the browser attach the httpOnly session cookie. JavaScript never sees
+ * the token. In production `NEXT_PUBLIC_API_URL` is "/api" (same-origin,
+ * proxied to the API by Netlify), so the cookie is first-party.
+ */
+function apiFetch(path: string, init?: RequestInitWithDuplex): Promise<Response> {
+  return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, { ...init, credentials: "include" });
+}
 
-  if (init?.token) {
-    headers.set("Authorization", `Bearer ${init.token}`);
-  }
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
 
   if (
     init?.body &&
@@ -129,7 +132,7 @@ async function request<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
+  const response = await apiFetch(path, {
     ...init,
     headers
   });
@@ -261,17 +264,14 @@ export const authApi = {
     });
   },
 
-  logout(token: string): Promise<void> {
+  logout(): Promise<void> {
     return request<void>("/auth/logout", {
-      method: "POST",
-      token
+      method: "POST"
     });
   },
 
-  me(token: string): Promise<{ user: UserDTO }> {
-    return request<{ user: UserDTO }>("/auth/me", {
-      token
-    });
+  me(): Promise<{ user: UserDTO }> {
+    return request<{ user: UserDTO }>("/auth/me");
   },
 
   /**
@@ -286,22 +286,18 @@ export const authApi = {
   changePassword(
     currentPassword: string,
     newPassword: string,
-    vaults: VaultPasswordRewrap[],
-    token: string
+    vaults: VaultPasswordRewrap[]
   ): Promise<void> {
     return request<void>("/auth/password", {
       method: "PUT",
-      token,
       body: JSON.stringify({ currentPassword, newPassword, vaults })
     });
   }
 };
 
 export const vaultApi = {
-  list(token: string): Promise<{ vaults: VaultDTO[] }> {
-    return request<{ vaults: VaultDTO[] }>("/vaults", {
-      token
-    });
+  list(): Promise<{ vaults: VaultDTO[] }> {
+    return request<{ vaults: VaultDTO[] }>("/vaults");
   },
 
   /**
@@ -311,10 +307,8 @@ export const vaultApi = {
    * server scopes this to the authenticated owner; there is no public
    * vault-lookup path.
    */
-  get(vaultId: string, token: string): Promise<{ vault: VaultDTO }> {
-    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}`, {
-      token
-    });
+  get(vaultId: string): Promise<{ vault: VaultDTO }> {
+    return request<{ vault: VaultDTO }>(`/vaults/${vaultId}`);
   },
 
   /**
@@ -325,20 +319,17 @@ export const vaultApi = {
    */
   create(
     name: string,
-    token: string,
     encryption: VaultEncryptionEnvelope
   ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>("/vaults", {
       method: "POST",
-      token,
       body: JSON.stringify({ name, encryption })
     });
   },
 
-  delete(vaultId: string, token: string): Promise<void> {
+  delete(vaultId: string): Promise<void> {
     return request<void>(`/vaults/${vaultId}`, {
-      method: "DELETE",
-      token
+      method: "DELETE"
     });
   },
 
@@ -350,12 +341,9 @@ export const vaultApi = {
    * has no recovery envelope yet.
    */
   getRecoveryEnvelope(
-    vaultId: string,
-    token: string
+    vaultId: string
   ): Promise<RecoveryEnvelopeResponse> {
-    return request<RecoveryEnvelopeResponse>(`/vaults/${vaultId}/recovery-key`, {
-      token
-    });
+    return request<RecoveryEnvelopeResponse>(`/vaults/${vaultId}/recovery-key`);
   },
 
   /**
@@ -367,12 +355,10 @@ export const vaultApi = {
    */
   enrollRecoveryKey(
     vaultId: string,
-    envelope: RecoveryEnvelopeResponse,
-    token: string
+    envelope: RecoveryEnvelopeResponse
   ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/recovery-key`, {
       method: "PUT",
-      token,
       body: JSON.stringify(envelope)
     });
   },
@@ -386,12 +372,10 @@ export const vaultApi = {
    */
   rewrapEncryption(
     vaultId: string,
-    envelope: VaultEncryptionEnvelope,
-    token: string
+    envelope: VaultEncryptionEnvelope
   ): Promise<{ vault: VaultDTO }> {
     return request<{ vault: VaultDTO }>(`/vaults/${vaultId}/encryption`, {
       method: "PUT",
-      token,
       body: JSON.stringify(envelope)
     });
   }
@@ -399,14 +383,10 @@ export const vaultApi = {
 
 export const folderApi = {
   list(
-    vaultId: string,
-    token: string
+    vaultId: string
   ): Promise<{ folders: FolderDTO[] }> {
     return request<{ folders: FolderDTO[] }>(
-      `/folders?vaultId=${vaultId}`,
-      {
-        token
-      }
+      `/folders?vaultId=${vaultId}`
     );
   },
 
@@ -417,8 +397,7 @@ export const folderApi = {
    */
   contents(
     vaultId: string,
-    folderId: string | null,
-    token: string
+    folderId: string | null
   ): Promise<FolderContentsResponse> {
     const params = new URLSearchParams({ vaultId });
 
@@ -427,24 +406,19 @@ export const folderApi = {
     }
 
     return request<FolderContentsResponse>(
-      `/folders/contents?${params.toString()}`,
-      {
-        token
-      }
+      `/folders/contents?${params.toString()}`
     );
   },
 
   create(
     vaultId: string,
     nameInput: NameInput,
-    token: string,
     parentId?: string | null
   ): Promise<{ folder: FolderDTO }> {
     return request<{ folder: FolderDTO }>(
       "/folders",
       {
         method: "POST",
-        token,
         body: JSON.stringify({
           vaultId,
           parentId,
@@ -456,14 +430,12 @@ export const folderApi = {
 
   rename(
     folderId: string,
-    nameInput: NameInput,
-    token: string
+    nameInput: NameInput
   ): Promise<{ folder: FolderDTO }> {
     return request<{ folder: FolderDTO }>(
       `/folders/${folderId}`,
       {
         method: "PATCH",
-        token,
         body: JSON.stringify(nameInput)
       }
     );
@@ -485,8 +457,7 @@ export const folderApi = {
   search(
     vaultId: string,
     query: string | null,
-    folderId: string | null,
-    token: string
+    folderId: string | null
   ): Promise<SearchResponse> {
     const params = new URLSearchParams({ vaultId });
 
@@ -499,10 +470,7 @@ export const folderApi = {
     }
 
     return request<SearchResponse>(
-      `/folders/search?${params.toString()}`,
-      {
-        token
-      }
+      `/folders/search?${params.toString()}`
     );
   }
 };
@@ -511,7 +479,6 @@ export const fileApi = {
   async upload(
     vaultId: string,
     file: File,
-    token: string,
     folderId?: string | null
   ) {
     const formData = new FormData();
@@ -523,13 +490,10 @@ export const fileApi = {
       params.set("folderId", folderId);
     }
 
-    const response = await fetch(
-      `${env.NEXT_PUBLIC_API_URL}/files/upload?${params.toString()}`,
+    const response = await apiFetch(
+      `/files/upload?${params.toString()}`,
       {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
         body: formData
       }
     );
@@ -553,7 +517,6 @@ export const fileApi = {
     vaultId: string,
     file: File,
     vaultDek: CryptoKey,
-    token: string,
     folderId?: string | null
   ): Promise<{ file: FileDTO }> {
     if (!supportsStreamingRequestBody()) {
@@ -580,12 +543,11 @@ export const fileApi = {
       params.set("folderId", folderId);
     }
 
-    const response = await fetch(
-      `${env.NEXT_PUBLIC_API_URL}/files/upload-encrypted?${params.toString()}`,
+    const response = await apiFetch(
+      `/files/upload-encrypted?${params.toString()}`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/octet-stream"
         },
         body: ciphertextStream,
@@ -601,62 +563,44 @@ export const fileApi = {
   },
 
   list(
-    vaultId: string,
-    token: string
+    vaultId: string
   ): Promise<{ files: FileDTO[] }> {
     return request<{ files: FileDTO[] }>(
-      `/files?vaultId=${vaultId}`,
-      {
-        token
-      }
+      `/files?vaultId=${vaultId}`
     );
   },
 
-  download(fileId: string, token: string) {
-    return fetch(
-      `${env.NEXT_PUBLIC_API_URL}/files/${fileId}/download`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }
+  download(fileId: string) {
+    return apiFetch(
+      `/files/${fileId}/download`
     );
   },
 
-  preview(fileId: string, token: string) {
-    return fetch(
-      `${env.NEXT_PUBLIC_API_URL}/files/${fileId}/preview`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }
+  preview(fileId: string) {
+    return apiFetch(
+      `/files/${fileId}/preview`
     );
   },
 
   delete(
-    fileId: string,
-    token: string
+    fileId: string
   ): Promise<void> {
     return request<void>(
       `/files/${fileId}`,
       {
-        method: "DELETE",
-        token
+        method: "DELETE"
       }
     );
   },
 
   rename(
     fileId: string,
-    nameInput: NameInput,
-    token: string
+    nameInput: NameInput
   ): Promise<{ file: FileDTO }> {
     return request<{ file: FileDTO }>(
       `/files/${fileId}`,
       {
         method: "PATCH",
-        token,
         body: JSON.stringify(nameInput)
       }
     );

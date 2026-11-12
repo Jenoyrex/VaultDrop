@@ -218,7 +218,6 @@ describe("fetchFileBlob", () => {
         wrappedKeyIv: wrapped.iv,
         sizeBytes: ciphertext.length
       },
-      "test-token",
       vaultDek
     );
 
@@ -239,7 +238,6 @@ describe("fetchFileBlob", () => {
         wrappedKeyIv: null,
         sizeBytes: "plain legacy bytes".length
       },
-      "test-token",
       undefined
     );
 
@@ -261,7 +259,6 @@ describe("fetchFileBlob", () => {
           wrappedKeyIv: "def",
           sizeBytes: 3
         },
-        "test-token",
         undefined
       )
     ).rejects.toThrow(DecryptionError);
@@ -282,7 +279,6 @@ describe("fetchFileBlob", () => {
           wrappedKeyIv: null,
           sizeBytes: 0
         },
-        "test-token",
         undefined
       )
     ).rejects.toThrow("Download failed");

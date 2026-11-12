@@ -2,7 +2,6 @@
 
 import { X, Download, Trash2 } from "lucide-react";
 import { fileApi, type FileDTO } from "@/lib/api-client";
-import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { fetchFileBlob, saveBlob } from "@/lib/download/decrypt-download";
 
@@ -22,18 +21,16 @@ export default function ImageViewer({
   onClose,
   onDeleted
 }: ImageViewerProps) {
-  const { accessToken } = useAuth();
   const { getVaultKey } = useVaultKeys();
 
   async function handleDownload() {
-    if (!accessToken) return;
 
     try {
       const vaultDek = file.encrypted
         ? getVaultKey(file.vaultId)
         : undefined;
 
-      const blob = await fetchFileBlob(file, accessToken, vaultDek);
+      const blob = await fetchFileBlob(file, vaultDek);
       saveBlob(blob, displayName);
     } catch {
       alert("Download failed.");
@@ -41,15 +38,13 @@ export default function ImageViewer({
   }
 
   async function handleDelete() {
-    if (!accessToken) return;
 
     if (!confirm(`Delete "${displayName}"?`)) {
       return;
     }
 
     await fileApi.delete(
-      file.id,
-      accessToken
+      file.id
     );
 
     onDeleted();

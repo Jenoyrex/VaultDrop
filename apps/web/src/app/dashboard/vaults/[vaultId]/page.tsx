@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 
 import type { VaultDTO } from "@vaultdrop/types";
-import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { hasEncryptionEnvelope, createRecoveryEnvelope } from "@/lib/vault-keys";
 import { encryptText } from "@/lib/crypto";
@@ -52,7 +51,6 @@ const VAULT_ROOT_CRUMB: BreadcrumbEntry = { id: null, name: "Vault" };
 
 export default function VaultPage() {
   const params = useParams();
-  const { accessToken } = useAuth();
   const { isUnlocked, getVaultKey } = useVaultKeys();
 
   const vaultId = params.vaultId as string;
@@ -105,18 +103,12 @@ export default function VaultPage() {
 
   const loadContents = useCallback(
     async (folderId: string | null) => {
-      if (!accessToken) {
-        setLoading(false);
-        return;
-      }
-
       try {
         setLoading(true);
 
         const response = await folderApi.contents(
           vaultId,
-          folderId,
-          accessToken
+          folderId
         );
 
         setSubfolders(response.subfolders);
@@ -127,7 +119,7 @@ export default function VaultPage() {
         setLoading(false);
       }
     },
-    [accessToken, vaultId]
+    [vaultId]
   );
 
   // Reset to vault root whenever the vault itself changes (e.g. navigating
@@ -137,21 +129,16 @@ export default function VaultPage() {
   }, [vaultId]);
 
   const loadVault = useCallback(async () => {
-    if (!accessToken) {
-      setVaultLoading(false);
-      return;
-    }
-
     try {
       setVaultLoading(true);
-      const response = await vaultApi.get(vaultId, accessToken);
+      const response = await vaultApi.get(vaultId);
       setVault(response.vault);
     } catch (err) {
       console.error(err);
     } finally {
       setVaultLoading(false);
     }
-  }, [accessToken, vaultId]);
+  }, [vaultId]);
 
   useEffect(() => {
     loadVault();
@@ -174,13 +161,12 @@ export default function VaultPage() {
   // until the folder or vault changes), decrypts every name in it, and
   // filters that decrypted index locally with no further network calls.
   const loadSearchIndex = useCallback(async (): Promise<DecryptedSearchIndex | null> => {
-    if (!accessToken) return null;
 
     if (encryptedVault) {
       if (!vaultDek) return null;
 
       if (!searchIndexRef.current) {
-        const raw = await folderApi.search(vaultId, null, currentFolderId, accessToken);
+        const raw = await folderApi.search(vaultId, null, currentFolderId);
         searchIndexRef.current = await buildDecryptedSearchIndex(raw, vaultDek);
       }
 
@@ -188,12 +174,12 @@ export default function VaultPage() {
     }
 
     return null;
-  }, [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId]);
+  }, [encryptedVault, vaultDek, vaultId, currentFolderId]);
 
   const runSearch = useCallback(async () => {
     const trimmed = searchQuery.trim();
 
-    if (!trimmed || !accessToken) {
+    if (!trimmed) {
       setSearchResults(null);
       setSearching(false);
       return;
@@ -215,8 +201,7 @@ export default function VaultPage() {
         const raw = await folderApi.search(
           vaultId,
           trimmed,
-          currentFolderId,
-          accessToken
+          currentFolderId
         );
         // Legacy names never need decryption (resolveDisplayName is a
         // pass-through when `encrypted` is false) — reusing the same
@@ -238,7 +223,7 @@ export default function VaultPage() {
         setSearching(false);
       }
     }
-  }, [searchQuery, accessToken, vaultId, currentFolderId, encryptedVault, loadSearchIndex]);
+  }, [searchQuery, vaultId, currentFolderId, encryptedVault, loadSearchIndex]);
 
   // Recursive search — scoped to whichever folder is currently open (or
   // the whole vault at root) — filters as the user types, debounced so
@@ -274,7 +259,7 @@ export default function VaultPage() {
 
   const uploadFiles = useCallback(
     async (filesToUpload: File[]) => {
-      if (!accessToken || filesToUpload.length === 0) return;
+      if (filesToUpload.length === 0) return;
 
       // Files uploaded into an encrypted vault are always encrypted
       // client-side first; legacy (non-encrypted) vaults keep uploading
@@ -297,13 +282,11 @@ export default function VaultPage() {
                   vaultId,
                   file,
                   vaultDek,
-                  accessToken,
                   currentFolderId
                 )
               : fileApi.upload(
                   vaultId,
                   file,
-                  accessToken,
                   currentFolderId
                 )
           )
@@ -321,7 +304,7 @@ export default function VaultPage() {
         setUploading(false);
       }
     },
-    [accessToken, encryptedVault, vaultDek, vaultId, currentFolderId, loadContents]
+    [encryptedVault, vaultDek, vaultId, currentFolderId, loadContents]
   );
 
   async function handleUpload(
@@ -353,7 +336,6 @@ export default function VaultPage() {
   });
 
   async function createFolder(name: string) {
-    if (!accessToken) return;
 
     if (encryptedVault) {
       if (!vaultDek) {
@@ -366,14 +348,12 @@ export default function VaultPage() {
       await folderApi.create(
         vaultId,
         { encryptedName: ciphertext, nameIv: iv },
-        accessToken,
         currentFolderId ?? undefined
       );
     } else {
       await folderApi.create(
         vaultId,
         { name },
-        accessToken,
         currentFolderId ?? undefined
       );
     }
@@ -382,12 +362,12 @@ export default function VaultPage() {
   }
 
   async function handleSetUpRecoveryKey() {
-    if (!accessToken || !vaultDek) return;
+    if (!vaultDek) return;
 
     try {
       setSettingUpRecovery(true);
       const { recoveryKey, envelope } = await createRecoveryEnvelope(vaultDek);
-      await vaultApi.enrollRecoveryKey(vaultId, envelope, accessToken);
+      await vaultApi.enrollRecoveryKey(vaultId, envelope);
       setPendingRecoveryKey(recoveryKey);
     } catch (err) {
       console.error(err);

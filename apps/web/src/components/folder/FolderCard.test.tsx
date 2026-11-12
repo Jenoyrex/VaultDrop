@@ -32,10 +32,6 @@ vi.mock("@/hooks/useDisplayName", () => ({
   useDisplayName: useDisplayNameMock
 }));
 
-vi.mock("@/components/providers/auth-provider", () => ({
-  useAuth: () => ({ accessToken: "access-token-abc" })
-}));
-
 vi.mock("@/components/providers/vault-key-provider", () => ({
   useVaultKeys: () => ({ getVaultKey: getVaultKeyMock })
 }));
@@ -99,8 +95,7 @@ describe("FolderCard rename", () => {
 
     expect(folderApiRename).toHaveBeenCalledWith(
       "folder-1",
-      { name: "Beach Trip" },
-      "access-token-abc"
+      { name: "Beach Trip" }
     );
     expect(onRenamed).toHaveBeenCalledTimes(1);
   });
@@ -132,8 +127,7 @@ describe("FolderCard rename", () => {
     expect(encryptTextMock).toHaveBeenCalledWith("Beach Trip", FAKE_DEK);
     expect(folderApiRename).toHaveBeenCalledWith(
       "folder-1",
-      { encryptedName: "new-ciphertext", nameIv: "new-iv" },
-      "access-token-abc"
+      { encryptedName: "new-ciphertext", nameIv: "new-iv" }
     );
     expect(onRenamed).toHaveBeenCalledTimes(1);
   });

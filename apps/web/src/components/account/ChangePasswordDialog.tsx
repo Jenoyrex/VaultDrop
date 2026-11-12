@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { KeyRound, Loader2 } from "lucide-react";
 import type { VaultDTO } from "@vaultdrop/types";
-import { useAuth } from "@/components/providers/auth-provider";
 import { ApiError, authApi, vaultApi } from "@/lib/api-client";
 import {
   CorruptedVaultError,
@@ -31,7 +30,6 @@ type VaultCheckStatus = "checking" | "ready" | "failed";
  * form, since requiring it twice would add no security and worse UX.
  */
 export default function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
-  const { accessToken } = useAuth();
 
   const [encryptedVaults, setEncryptedVaults] = useState<VaultDTO[] | null>(null);
   const [vaultStatuses, setVaultStatuses] = useState<Record<string, VaultCheckStatus>>({});
@@ -43,14 +41,13 @@ export default function ChangePasswordDialog({ onClose }: ChangePasswordDialogPr
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    if (!accessToken) return;
     vaultApi
-      .list(accessToken)
+      .list()
       .then(({ vaults }) => {
         setEncryptedVaults(vaults.filter(hasEncryptionEnvelope));
       })
       .catch(() => setEncryptedVaults([]));
-  }, [accessToken]);
+  }, []);
 
   // Live per-vault verification: attempts to unwrap every encrypted
   // vault with whatever the user has currently typed as their current
@@ -103,7 +100,7 @@ export default function ChangePasswordDialog({ onClose }: ChangePasswordDialogPr
     allChecked;
 
   async function handleSubmit() {
-    if (!accessToken || !encryptedVaults) return;
+    if (!encryptedVaults) return;
 
     try {
       setSubmitting(true);
@@ -115,7 +112,7 @@ export default function ChangePasswordDialog({ onClose }: ChangePasswordDialogPr
         newPassword
       );
 
-      await authApi.changePassword(currentPassword, newPassword, rewraps, accessToken);
+      await authApi.changePassword(currentPassword, newPassword, rewraps);
 
       setDone(true);
     } catch (err) {

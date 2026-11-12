@@ -38,7 +38,7 @@ export default function CreateVaultDialog({
   onClose,
   onCreated,
 }: CreateVaultDialogProps) {
-  const { accessToken, user } = useAuth();
+  const { user } = useAuth();
   const { setVaultKey } = useVaultKeys();
 
   const [name, setName] = useState("");
@@ -61,10 +61,9 @@ export default function CreateVaultDialog({
     vaultId: string,
     generated: GeneratedRecovery
   ): Promise<void> {
-    if (!accessToken) return;
 
     try {
-      await vaultApi.enrollRecoveryKey(vaultId, generated.envelope, accessToken);
+      await vaultApi.enrollRecoveryKey(vaultId, generated.envelope);
       setPendingRecovery(null);
       setRecoveryKey(generated.recoveryKey);
     } catch {
@@ -98,7 +97,7 @@ export default function CreateVaultDialog({
   }
 
   async function handleCreate() {
-    if (!accessToken || !user) {
+    if (!user) {
       setError("You are not logged in.");
       return;
     }
@@ -122,10 +121,10 @@ export default function CreateVaultDialog({
       // password here would silently produce a vault that can never be
       // unlocked with the user's real password again. Reuses the exact
       // same authApi.login-based check UnlockVaultGate's restore-password
-      // flow already relies on: the call only verifies (a fresh token is
-      // returned but discarded, never stored), so it never touches the
-      // active session, and no vault crypto or vault creation happens
-      // unless this succeeds.
+      // flow already relies on. A successful call also re-sets the httpOnly
+      // session cookie for this same user at the same tokenVersion, which
+      // leaves the active session unchanged; no vault crypto or vault
+      // creation happens unless this succeeds.
       try {
         await authApi.login(user.username, password);
       } catch {
@@ -141,7 +140,6 @@ export default function CreateVaultDialog({
 
       const { vault } = await vaultApi.create(
         name.trim(),
-        accessToken,
         envelope
       );
 

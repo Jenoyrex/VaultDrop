@@ -4,7 +4,9 @@ import { buildCsp } from "@/lib/security-headers";
 
 function resolveApiOrigin(): string {
   const raw = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-  return new URL(raw).origin;
+  // A path like "/api" is same-origin (Netlify proxies it to the API), so
+  // 'self' already covers it and no extra origin is added to connect-src.
+  return raw.startsWith("/") ? "" : new URL(raw).origin;
 }
 
 /**

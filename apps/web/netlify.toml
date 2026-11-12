@@ -1,0 +1,15 @@
+# Same-origin API proxy (see docs/design-decisions.md, "Cookie sessions").
+#
+# The browser calls https://<this site>/api/..., and Netlify's CDN forwards
+# the request to the Render API. Because the browser only ever talks to
+# this origin, the API's httpOnly session cookie is first-party
+# (SameSite=Lax, __Host- prefix) instead of a third-party cookie that
+# Safari and Chrome's third-party-cookie blocking would drop.
+#
+# Requires NEXT_PUBLIC_API_URL=/api in the Netlify build environment.
+# `force = true` makes this rule win over any Next.js route at the same path.
+[[redirects]]
+  from = "/api/*"
+  to = "https://vaultdrop-api-jzrc.onrender.com/:splat"
+  status = 200
+  force = true

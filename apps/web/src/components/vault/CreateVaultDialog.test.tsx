@@ -140,13 +140,12 @@ describe("CreateVaultDialog", () => {
     useAuthMock.mockReturnValue({
       status: "authenticated",
       user: FAKE_USER,
-      accessToken: "access-token-abc",
       login: vi.fn(),
       register: vi.fn(),
       logout: vi.fn()
     });
 
-    authApiLogin.mockResolvedValue({ user: FAKE_USER, accessToken: "freshly-issued-token-xyz" });
+    authApiLogin.mockResolvedValue({ user: FAKE_USER });
     createVaultEnvelopeMock.mockResolvedValue({ dek: FAKE_DEK, envelope: FAKE_VAULT_ENVELOPE });
     vaultApiCreate.mockResolvedValue({ vault: FAKE_VAULT });
     createRecoveryEnvelopeMock.mockResolvedValue({
@@ -215,21 +214,20 @@ describe("CreateVaultDialog", () => {
 
     // vaultApi.create only ever receives the opaque envelope produced by
     // (mocked) createVaultEnvelope — never the DEK object or the password.
-    expect(vaultApiCreate).toHaveBeenCalledWith("My Vault", "access-token-abc", FAKE_VAULT_ENVELOPE);
+    expect(vaultApiCreate).toHaveBeenCalledWith("My Vault", FAKE_VAULT_ENVELOPE);
 
     // vaultApi.enrollRecoveryKey only ever receives the opaque envelope —
     // never the human-readable recovery key string.
     expect(vaultApiEnrollRecoveryKey).toHaveBeenCalledWith(
       FAKE_VAULT.id,
-      FAKE_RECOVERY_ENVELOPE,
-      "access-token-abc"
+      FAKE_RECOVERY_ENVELOPE
     );
     const enrollArgs = vaultApiEnrollRecoveryKey.mock.calls[0]!;
     expect(JSON.stringify(enrollArgs)).not.toContain(FAKE_RECOVERY_KEY);
   });
 
   it("disables the name/password inputs and the submit button while the operation is loading", async () => {
-    const loginGate = deferred<{ user: typeof FAKE_USER; accessToken: string }>();
+    const loginGate = deferred<{ user: typeof FAKE_USER }>();
     authApiLogin.mockReturnValue(loginGate.promise);
 
     const user = userEvent.setup();
@@ -245,7 +243,7 @@ describe("CreateVaultDialog", () => {
       expect((screen.getByRole("button", { name: /cancel/i }) as HTMLButtonElement).disabled).toBe(true);
     });
 
-    loginGate.resolve({ user: FAKE_USER, accessToken: "freshly-issued-token-xyz" });
+    loginGate.resolve({ user: FAKE_USER });
 
     await waitFor(() => expect(vaultApiCreate).toHaveBeenCalled());
   });
@@ -255,7 +253,7 @@ describe("CreateVaultDialog", () => {
     // this is still unresolved, so this genuinely exercises concurrent/
     // in-flight behavior rather than two separate, sequential, completed
     // operations.
-    const loginGate = deferred<{ user: typeof FAKE_USER; accessToken: string }>();
+    const loginGate = deferred<{ user: typeof FAKE_USER }>();
     authApiLogin.mockReturnValue(loginGate.promise);
 
     const user = userEvent.setup();
@@ -275,7 +273,7 @@ describe("CreateVaultDialog", () => {
 
     expect(authApiLogin).toHaveBeenCalledTimes(1);
 
-    loginGate.resolve({ user: FAKE_USER, accessToken: "freshly-issued-token-xyz" });
+    loginGate.resolve({ user: FAKE_USER });
 
     await waitFor(() => expect(vaultApiEnrollRecoveryKey).toHaveBeenCalled());
 

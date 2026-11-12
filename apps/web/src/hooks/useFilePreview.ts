@@ -16,15 +16,12 @@ export interface PreviewableFile {
 
 export function useFilePreview(
   file: PreviewableFile,
-  token: string | null,
   vaultDek: CryptoKey | undefined
 ) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
-
     const isImage = file.mimeType.startsWith("image/");
     const isPdf = file.mimeType === "application/pdf";
 
@@ -45,7 +42,7 @@ export function useFilePreview(
       try {
         setLoading(true);
 
-        const response = await fileApi.preview(file.id, token as string);
+        const response = await fileApi.preview(file.id);
 
         if (!response.ok) {
           throw new Error("Failed to load preview");
@@ -83,7 +80,6 @@ export function useFilePreview(
     file.encrypted,
     file.wrappedKeyCiphertext,
     file.wrappedKeyIv,
-    token,
     vaultDek
   ]);
 

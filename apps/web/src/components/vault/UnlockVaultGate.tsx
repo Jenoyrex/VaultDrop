@@ -40,7 +40,7 @@ export default function UnlockVaultGate({
   onUnlocked
 }: UnlockVaultGateProps) {
   const { unlockVault, setVaultKey } = useVaultKeys();
-  const { accessToken, user } = useAuth();
+  const { user } = useAuth();
 
   const [mode, setMode] = useState<Mode>("password");
   const [password, setPassword] = useState("");
@@ -78,16 +78,12 @@ export default function UnlockVaultGate({
       setError("Please enter your recovery key.");
       return;
     }
-    if (!accessToken) {
-      setError("You are not logged in.");
-      return;
-    }
 
     try {
       setLoading(true);
       setError("");
 
-      const envelope = await vaultApi.getRecoveryEnvelope(vault.id, accessToken);
+      const envelope = await vaultApi.getRecoveryEnvelope(vault.id);
       const dek = await unwrapVaultDekWithRecoveryKey(envelope, recoveryKeyInput.trim());
 
       // Held locally only — deliberately not put into VaultKeyProvider
@@ -111,7 +107,7 @@ export default function UnlockVaultGate({
   }
 
   async function handleRestorePassword() {
-    if (!recoveredDek || !accessToken || !user) return;
+    if (!recoveredDek || !user) return;
 
     if (!restorePassword) {
       setError("Please enter your current account password.");
@@ -129,7 +125,7 @@ export default function UnlockVaultGate({
       await authApi.login(user.username, restorePassword);
 
       const envelope = await rewrapVaultDekWithPassword(recoveredDek, restorePassword);
-      await vaultApi.rewrapEncryption(vault.id, envelope, accessToken);
+      await vaultApi.rewrapEncryption(vault.id, envelope);
 
       finishRecovery(recoveredDek);
     } catch {

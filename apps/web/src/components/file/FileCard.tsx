@@ -15,7 +15,6 @@ import {
   type FileDTO
 } from "@/lib/api-client";
 
-import { useAuth } from "@/components/providers/auth-provider";
 import { useVaultKeys } from "@/components/providers/vault-key-provider";
 import { useFilePreview } from "@/hooks/useFilePreview";
 import { useDisplayName } from "@/hooks/useDisplayName";
@@ -54,8 +53,6 @@ export default function FileCard({
   onRenamed,
   pathLabel
 }: FileCardProps) {
-
-  const { accessToken } = useAuth();
   const { getVaultKey } = useVaultKeys();
 
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -77,16 +74,15 @@ export default function FileCard({
   const { base: fileBaseName, extension: fileExtension } =
     splitFileName(nameForDisplay);
 
-  const { previewUrl } = useFilePreview(file, accessToken, vaultDek);
+  const { previewUrl } = useFilePreview(file, vaultDek);
 
   const isImage = file.mimeType.startsWith("image/");
   const isPdf = file.mimeType === "application/pdf";
 
   async function handleDownload() {
-    if (!accessToken) return;
 
     try {
-      const blob = await fetchFileBlob(file, accessToken, vaultDek);
+      const blob = await fetchFileBlob(file, vaultDek);
       saveBlob(blob, nameForDisplay);
     } catch {
       alert("Download failed.");
@@ -95,8 +91,6 @@ export default function FileCard({
 
   async function handleDelete(): Promise<boolean> {
 
-    if (!accessToken) return false;
-
     if (!confirm(`Delete "${nameForDisplay}"?`)) {
       return false;
     }
@@ -104,8 +98,7 @@ export default function FileCard({
     try {
 
       await fileApi.delete(
-        file.id,
-        accessToken
+        file.id
       );
 
       onDeleted();
@@ -123,7 +116,6 @@ export default function FileCard({
   }
 
   async function handleRename(newName: string) {
-    if (!accessToken) return;
 
     if (nameError) {
       alert(
@@ -142,14 +134,12 @@ export default function FileCard({
 
       await fileApi.rename(
         file.id,
-        { encryptedName: ciphertext, nameIv: iv },
-        accessToken
+        { encryptedName: ciphertext, nameIv: iv }
       );
     } else {
       await fileApi.rename(
         file.id,
-        { name: newName },
-        accessToken
+        { name: newName }
       );
     }
 
