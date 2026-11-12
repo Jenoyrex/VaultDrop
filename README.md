@@ -248,7 +248,7 @@ pnpm test        # Vitest across all apps/packages
 pnpm build       # Production build of every app/package
 ```
 
-Current suite: 279 passing tests and 1 skipped (the opt-in live B2 test) across 4 packages — config 8, crypto 6, server 121 + 1 skipped, web 144[^tests].
+Current suite: 280 passing tests and 1 skipped (the opt-in live B2 test) across 4 packages — config 8, crypto 6, server 122 + 1 skipped, web 144[^tests].
 
 Test coverage includes, among others:
 - Server-side vault creation, including enforcement of the mandatory encryption envelope on new vaults
@@ -340,4 +340,4 @@ All rights reserved — see [`LICENSE`](./LICENSE). This repository is shared fo
 [^argon2]: `grep -n -A4 ARGON2_OPTIONS packages/crypto/src/password.ts` → `memoryCost: 19456` (KiB), `timeCost: 2`, `parallelism: 1`.
 [^pbkdf2]: `grep -n DEFAULT_KDF_ITERATIONS apps/web/src/lib/crypto/kdf.ts` → `600_000`. Stored per vault (`kekIterations`), so existing vaults keep the count they were created with.
 [^jwt]: `grep -n JWT_EXPIRES_IN packages/config/src/server-env.ts` → default `"15m"`.
-[^tests]: `pnpm test` on 2026-11-12, summing each package's `Tests` line: config 8, crypto 6, server 121 passed + 1 skipped, web 144.
+[^tests]: `pnpm test` on 2026-11-12, summing each package's `Tests` line: config 8, crypto 6, server 122 passed + 1 skipped, web 144.

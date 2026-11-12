@@ -111,7 +111,7 @@ export class AuthService {
     currentPassword: string,
     newPassword: string,
     vaultRewraps: VaultPasswordRewrap[]
-  ): Promise<string> {
+  ): Promise<void> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw AppError.unauthorized();
@@ -126,9 +126,9 @@ export class AuthService {
 
     // The password hash and tokenVersion change in the same update, so
     // every other session is revoked atomically with the password change.
-    // The bumped version is returned so the caller can re-issue a token
-    // for the device that made this request.
-    const tokenVersion = await this.prisma.$transaction(async (tx) => {
+    // The route then calls issueSessionToken to keep the requesting device
+    // signed in at the new version.
+    await this.prisma.$transaction(async (tx) => {
       // Live re-read, inside the transaction — not trusted from an
       // earlier client-side snapshot — of exactly which vaults this
       // account currently has encrypted (legacy plaintext vaults are
@@ -158,7 +158,7 @@ export class AuthService {
         );
       }
 
-      const updated = await tx.user.update({
+      await tx.user.update({
         where: { id: userId },
         data: { passwordHash: newPasswordHash, tokenVersion: { increment: 1 } }
       });
@@ -178,10 +178,15 @@ export class AuthService {
           }
         });
       }
-
-      return updated.tokenVersion;
     });
+  }
 
-    return this.signFor({ id: user.id, username: user.username, tokenVersion });
+  /** Signs a token at the user's current tokenVersion (read fresh from the DB). */
+  async issueSessionToken(userId: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw AppError.unauthorized();
+    }
+    return this.signFor(user);
   }
 }

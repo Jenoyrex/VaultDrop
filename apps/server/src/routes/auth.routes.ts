@@ -9,7 +9,7 @@ import {
   readSessionCookie,
   setSessionCookie
 } from "../middleware/auth.js";
-import { verifyAccessToken } from "@vaultdrop/crypto";
+import { InvalidTokenError, verifyAccessToken } from "@vaultdrop/crypto";
 import { AppError } from "../utils/app-error.js";
 import { AuthService } from "../services/auth.service.js";
 import { changePasswordSchema, loginSchema, registerSchema } from "./auth.schemas.js";
@@ -62,15 +62,17 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
   router.post(
     "/logout",
     asyncHandler(async (req, res) => {
-      const token = readSessionCookie(req, env);
-      let userId: string | undefined;
       try {
-        userId = token ? verifyAccessToken(token, env.JWT_SECRET).sub : undefined;
-      } catch {
-        // Invalid/expired token: nothing to revoke, just clear the cookie.
-      }
-      if (userId) {
-        await authService.revokeAllSessions(userId);
+        // Revocation only ever happens for a token whose signature and
+        // claims verify; a missing cookie verifies as "" and throws.
+        const { sub } = verifyAccessToken(readSessionCookie(req, env) ?? "", env.JWT_SECRET);
+        await authService.revokeAllSessions(sub);
+      } catch (error) {
+        // Invalid/expired/missing token: nothing to revoke, just clear the
+        // cookie. Anything else (e.g. a database error) is a real failure.
+        if (!(error instanceof InvalidTokenError)) {
+          throw error;
+        }
       }
       clearSessionCookie(res, env);
       res.status(204).send();
@@ -104,7 +106,7 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
         throw AppError.unauthorized();
       }
       const body = changePasswordSchema.parse(req.body);
-      const token = await authService.changePassword(
+      await authService.changePassword(
         req.user.sub,
         body.currentPassword,
         body.newPassword,
@@ -112,7 +114,7 @@ export function createAuthRouter(prisma: PrismaClient, env: ServerEnv): Router {
       );
       // All other sessions were revoked by the password change; keep this
       // device signed in with a token at the new version.
-      setSessionCookie(res, env, token);
+      setSessionCookie(res, env, await authService.issueSessionToken(req.user.sub));
       res.status(204).send();
     })
   );

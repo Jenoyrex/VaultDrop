@@ -112,6 +112,22 @@ export function createAuthRateLimiters(env: ServerEnv): AuthRateLimiters {
  * today, and introducing one is a real infrastructure addition, not a
  * config tweak.
  */
+/**
+ * Per-IP ceiling mounted in front of every router, before `requireAuth`.
+ * `requireAuth` does a database lookup (the tokenVersion check), and the
+ * per-user limiters below can only run after it, so without this a flood
+ * of requests carrying a validly signed token would reach the database
+ * unthrottled. Deliberately generous (10x the per-user API budget, same
+ * window) so that it only stops floods, never normal use; the per-user
+ * and credential limiters remain the real budgets. Like every per-IP
+ * limiter here, it is only as accurate as `TRUST_PROXY_HOPS`.
+ */
+export function createIpFloodLimiter(env: ServerEnv): RateLimitRequestHandler {
+  const windowMs = env.API_RATE_LIMIT_WINDOW_MS ?? DEFAULT_API_WINDOW_MS;
+  const apiMax = env.API_RATE_LIMIT_MAX ?? DEFAULT_API_MAX;
+  return buildLimiter(windowMs, apiMax * 10);
+}
+
 export interface ApiRateLimiters {
   generalApiLimiter: RateLimitRequestHandler;
   uploadLimiter: RateLimitRequestHandler;

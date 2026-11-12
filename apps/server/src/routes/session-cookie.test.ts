@@ -241,6 +241,19 @@ describe("CSRF: Origin/Referer check on state-changing requests", () => {
   });
 });
 
+describe("per-IP flood ceiling", () => {
+  it("rate-limits requests before the session check reaches the database", async () => {
+    // Ceiling is 10x API_RATE_LIMIT_MAX per IP: 10 here.
+    const { app } = makeApp({ ...TEST_ENV, API_RATE_LIMIT_MAX: 1, API_RATE_LIMIT_WINDOW_MS: 60_000 });
+    for (let i = 0; i < 10; i++) {
+      expect((await request(app).get("/auth/me")).status).toBe(401);
+    }
+    const limited = await request(app).get("/auth/me");
+    expect(limited.status).toBe(429);
+    expect(limited.body.error.code).toBe("RATE_LIMITED");
+  });
+});
+
 describe("server-side session invalidation", () => {
   it("logout clears the cookie and makes the old token unusable", async () => {
     const { app } = makeApp();

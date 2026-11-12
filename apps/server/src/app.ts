@@ -10,7 +10,7 @@ import { createFolderRouter } from "./routes/folder.routes.js";
 import { createFileRouter } from "./routes/file.routes.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { requestLogger } from "./middleware/request-logger.js";
-import { createApiRateLimiters } from "./middleware/rate-limit.js";
+import { createApiRateLimiters, createIpFloodLimiter } from "./middleware/rate-limit.js";
 import { createOriginCheck } from "./middleware/origin-check.js";
 
 export function createApp(prisma: PrismaClient, env: ServerEnv, storage: StorageAdapter): Express {
@@ -35,6 +35,9 @@ export function createApp(prisma: PrismaClient, env: ServerEnv, storage: Storage
   // Before body parsing and every router, so a forged cross-origin
   // request is rejected before any work is done on it.
   app.use(createOriginCheck(env));
+  // Per-IP flood ceiling ahead of every router, so the session check's
+  // database lookup in requireAuth is never reachable without a limiter.
+  app.use(createIpFloodLimiter(env));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => {
