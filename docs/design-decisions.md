@@ -242,3 +242,42 @@ script); `unsafe-inline` (defeats the purpose); a static CSP from
 changes per request, so pages are not statically cached. Development
 allows `unsafe-eval` for Fast Refresh. A CSP does not protect against a
 malicious server, which controls the CSP too.
+
+---
+
+## ADR-7: Per-request database check for token revocation
+
+**Context.** ADR-4 makes tokens revocable by comparing the token's `ver`
+claim with `User.tokenVersion`. That comparison has to read the current
+value from somewhere on every authenticated request.
+
+**Decision.** Read it from PostgreSQL on every request: one primary-key
+lookup selecting a single integer column (`createAuthMiddleware` in
+`apps/server/src/middleware/auth.ts`). No cache.
+
+**Cost.** One extra round trip to Neon per authenticated request, on top of
+the queries the route already makes. It is an indexed point read of one
+column, so the cost is dominated by network latency to the database
+(typically a few milliseconds from the same region), not query work. The
+per-IP flood limiter (ADR-5) runs before it, so the lookup cannot be
+driven unthrottled. At this project's traffic the cost is negligible; it
+would matter at thousands of requests per second, or with a database far
+from the API.
+
+**Alternatives.**
+- *Short-lived cache of `tokenVersion` per user (30–60 s)*, in process
+  memory for one instance or in Redis for several. This removes most
+  lookups. **Trade-off:** a revoked token keeps working until the cache
+  entry expires, so "logout revokes immediately" becomes "logout revokes
+  within the TTL". An in-memory cache also does not see revocations made
+  on another instance, so with several instances it needs Redis, or a
+  pub/sub invalidation message on logout/password change.
+- *No revocation, rely on the 15-minute expiry:* no lookup, but a stolen
+  token stays valid until it expires (the previous behavior).
+- *A denylist of revoked token ids:* lookups only hit a small set, but it
+  is still a per-request read and needs cleanup of expired entries.
+
+**Consequences.** Revocation is immediate and correct across any number of
+instances, at the cost of one indexed read per request. Revisit with the
+cache option, and accept the TTL window, only if profiling shows this
+lookup matters.
